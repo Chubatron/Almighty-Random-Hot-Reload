@@ -13,11 +13,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from animated_background import AnimatedBackground
 
+
 class MainMenuScreen(Screen):
     """Главное меню с кнопками"""
 
     def __init__(self, **kwargs):
+        # Извлекаем screen_params из kwargs
+        self.screen_params = kwargs.pop('screen_params', None)
         super().__init__(**kwargs)
+
         layout = FloatLayout()
 
         # Анимированный фон
@@ -61,10 +65,10 @@ class MainMenuScreen(Screen):
 
     def on_pre_enter(self, *args):
         """Вызывается перед показом экрана"""
-        SoundManager().play()  # Музыка играет
+        SoundManager().play()
 
     def on_leave(self, *args):
-        """Вызывается при уходе с экрана - НЕ ОСТАНАВЛИВАЕМ музыку"""
+        """Вызывается при уходе с экрана"""
         pass
 
     def create_buttons(self, layout):
@@ -72,14 +76,15 @@ class MainMenuScreen(Screen):
         sports = [
             ('MagicBall', 'assets/images/buttons/Football_ball_button.png', 'magic_ball', self.change_to_game),
             ('Dice', 'assets/images/buttons/Dice_button.png', 'dice', self.change_to_game),
-            ('Roulette', 'assets/images/buttons/Blue_roulette_button.png', 'intermediate_roulette', self.change_to_intermediate_roulette),  # ← Изменено
+            ('Roulette', 'assets/images/buttons/Blue_roulette_button.png', 'intermediate_roulette',
+             self.change_to_intermediate_roulette),
             ('Random', 'assets/images/buttons/Green_random_button.png', 'random', self.change_to_game),
             ('Coin', 'assets/images/buttons/Grey_cent_button.png', 'coin', self.change_to_game),
             ('Quiz', 'assets/images/buttons/Green_quiz_button.png', 'quiz', self.change_to_game),
             ('RSP', 'assets/images/buttons/rsp_button.png', 'rsp', self.change_to_game),
         ]
 
-        # Сетка 4x2 (8 позиций, 7 кнопок + 1 пустая)
+        # Сетка 4x2
         rows, cols = 4, 2
         button_width, button_height = 0.4, 0.12
         horizontal_spacing, vertical_spacing = 0.1, 0.03
@@ -102,7 +107,6 @@ class MainMenuScreen(Screen):
 
     def change_to_game(self, instance):
         """Переход к игровому экрану"""
-        # Проверяем, существует ли метод start_game у экрана
         if hasattr(self.manager.get_screen(instance.sport), 'start_game'):
             self.manager.get_screen(instance.sport).start_game()
         self.manager.current = instance.sport

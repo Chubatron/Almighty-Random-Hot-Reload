@@ -34,6 +34,9 @@ def sync_file(filepath):
         subprocess.run(f'{ADB} shell "run-as {PACKAGE} rm -f {APP_DIR}/components/{filename[:-3]}.*"', shell=True)
     elif filepath.startswith("locales/"):
         subprocess.run(f'{ADB} shell "run-as {PACKAGE} cp /data/local/tmp/{filename} {APP_DIR}/locales/"', shell=True)
+    elif filepath == "main.py":
+        subprocess.run(f'{ADB} shell "run-as {PACKAGE} cp /data/local/tmp/{filename} {APP_DIR}/"', shell=True)
+        subprocess.run(f'{ADB} shell "run-as {PACKAGE} rm -f {APP_DIR}/{filename[:-3]}.*"', shell=True)
     
     subprocess.run(f"{ADB} shell am force-stop {PACKAGE}", shell=True)
     time.sleep(0.5)
@@ -55,6 +58,10 @@ print(f"Загружено {len(state)} файлов из истории")
 # Собираем все файлы для отслеживания
 files_to_watch = []
 
+# ✅ ДОБАВЛЯЕМ main.py
+if os.path.exists("main.py"):
+    files_to_watch.append("main.py")
+
 if os.path.exists("screens"):
     for f in os.listdir("screens"):
         if f.endswith(".py") and f != "__init__.py":
@@ -71,6 +78,9 @@ if os.path.exists("locales"):
             files_to_watch.append(f"locales/{f}")
 
 print(f"Отслеживается {len(files_to_watch)} файлов")
+print("Список отслеживаемых файлов:")
+for f in files_to_watch:
+    print(f"  - {f}")
 
 # Инициализируем состояние для новых файлов
 for file in files_to_watch:

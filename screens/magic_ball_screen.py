@@ -5,6 +5,7 @@ import os
 import math
 import json
 import random
+from kivy.app import App
 from kivy.uix.image import Image
 from kivy.uix.widget import Widget
 from kivy.uix.label import Label
@@ -43,6 +44,8 @@ class SpriteSheetBall(Widget):
     _ball_bounds = ListProperty([0, 0, 0, 0])
 
     def __init__(self, **kwargs):
+        # Получаем переданный размер мяча
+        self.initial_ball_size = kwargs.pop('ball_size', None)
         super().__init__(**kwargs)
 
         if self.sprite_sheet_path and os.path.exists(self.sprite_sheet_path):
@@ -73,6 +76,26 @@ class SpriteSheetBall(Widget):
                 self._texture.blit_buffer(img.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
             else:
                 self._texture.blit_buffer(img.convert('RGB').tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+
+            # ПРИНУДИТЕЛЬНО используем реальные пиксели на телефоне
+            from kivy.utils import platform
+            from kivy.core.window import Window
+
+            if platform == 'android':
+                real_width = Window.system_size[0]
+                self.ball_size = real_width * 0.16  # 16% от реальной ширины (1/3 меньше от 24%)
+                print(f"[DEBUG] SpriteSheetBall Android: real_width={real_width}, ball_size={self.ball_size}")
+            else:
+                # Используем переданный размер или fallback
+                if self.initial_ball_size:
+                    self.ball_size = self.initial_ball_size
+                else:
+                    app = App.get_running_app()
+                    screen_params = getattr(app, 'screen_params', None)
+                    if screen_params:
+                        self.ball_size = screen_params.width * 0.16
+                    else:
+                        self.ball_size = 64  # 16% от 400
 
             self.size = (self.ball_size, self.ball_size)
             self._update_display()
@@ -324,7 +347,14 @@ class AnswerManager:
 class AnswerLabel(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.font_size = 48
+        # Получаем параметры экрана из приложения
+        app = App.get_running_app()
+        screen_params = getattr(app, 'screen_params', None)
+
+        if screen_params:
+            self.font_size = screen_params.width * 0.06
+        else:
+            self.font_size = 48
         self.color = (0, 0, 0, 1)
         self.size_hint = (None, None)
         self.opacity = 0
@@ -340,7 +370,7 @@ class AnswerLabel(Label):
         label.refresh()
         text_size = label.texture.size
 
-        padding = 20
+        padding = self.font_size * 0.5
         self.width = text_size[0] + padding * 2
         self.height = text_size[1] + padding
 
@@ -365,14 +395,46 @@ class MagicBallScreen(BaseGameScreen):
     bounce_sound_path = StringProperty('assets/sounds/football_bounce.wav')
 
     def __init__(self, **kwargs):
-        if 'background_path' not in kwargs:
-            kwargs['background_path'] = self.background_path
-
+        # Параметры экрана передаются через kwargs из main.py
+        self.screen_params = kwargs.pop('screen_params', None)
         super().__init__(**kwargs)
+
+        # Fallback: если не передали, пробуем получить из приложения
+        if not self.screen_params:
+            app = App.get_running_app()
+            self.screen_params = getattr(app, 'screen_params', None)
+            print(f"[DEBUG] MagicBallScreen: screen_params from app fallback = {self.screen_params}")
+        else:
+            print(f"[DEBUG] MagicBallScreen: screen_params from kwargs = {self.screen_params.width}x{self.screen_params.height}")
+
+        # ПРИНУДИТЕЛЬНО используем реальные пиксели на телефоне
+        from kivy.utils import platform
+        from kivy.core.window import Window
+
+        if platform == 'android':
+            # На телефоне берём реальные пиксели напрямую
+            real_width = Window.system_size[0]
+            real_height = Window.system_size[1]
+            print(f"[DEBUG] Android real size: {real_width}x{real_height}")
+
+            self.ball_size = real_width * 0.16  # 16% от реальной ширины (1/3 меньше от 24%)
+            print(f"[DEBUG] Android: ball_size = {real_width} * 0.16 = {self.ball_size}")
+        else:
+            # На компьютере используем screen_params
+            if self.screen_params:
+                self.ball_size = self.screen_params.width * 0.16  # 16% от ширины экрана
+            else:
+                self.ball_size = 64  # 16% от 400
+            print(f"[DEBUG] Computer: ball_size = {self.ball_size}")
+
+        self.base_shadow_offset_x = self.ball_size * 0.12
+        self.base_shadow_offset_y = self.ball_size * 0.12
+        self.max_shadow_distance = self.ball_size * 1.5
+        self.max_shadow_scale = 1.2
+        print(f"[DEBUG] MagicBallScreen: ball_size={self.ball_size}, screen_width={self.screen_params.width if self.screen_params else 'None'}")
 
         self.ball = None
         self.physics = None
-        self.ball_size = 75
         self.touch_start = None
         self.is_moving = False
         self.animation_counter = 0
@@ -397,10 +459,6 @@ class MagicBallScreen(BaseGameScreen):
 
         self.shadow_distance = 0
         self.shadow_timer = 0
-        self.base_shadow_offset_x = self.ball_size * 0.12
-        self.base_shadow_offset_y = self.ball_size * 0.12
-        self.max_shadow_distance = self.ball_size * 1.5
-        self.max_shadow_scale = 1.2
 
         self._load_bounce_sound()
 
@@ -437,8 +495,8 @@ class MagicBallScreen(BaseGameScreen):
         screen_width = self.layout.width
         screen_height = self.layout.height
 
-        min_x = 0
-        max_x = screen_width - self.ball_size
+        min_x = self.ball_size * 0.5
+        max_x = screen_width - self.ball_size * 1.5
         random_x = random.uniform(min_x, max_x)
 
         min_y = screen_height * 0.25
@@ -684,25 +742,37 @@ class MagicBallScreen(BaseGameScreen):
             Clock.schedule_once(lambda dt: self._show_random_answer(), 0.1)
 
     def on_enter(self):
+        # Вызываем родительский on_enter (он создаст фоновую музыку и кнопку)
         super().on_enter()
+        # Создаём специфичный для экрана UI (мяч, фон)
         self._setup_ui()
-        Clock.schedule_once(lambda dt: self._bring_back_button_to_front(), 0.1)
+        # Запускаем физику
         Clock.schedule_interval(self._update_physics, 1 / 60.0)
 
     def on_leave(self):
         super().on_leave()
         Clock.unschedule(self._update_physics)
+        Clock.unschedule(self._update_zoom_animation)
+        Clock.unschedule(self._animate_ball_fall)
+        Clock.unschedule(self._show_random_answer)
+
         if self.answer_label:
             self.layout.remove_widget(self.answer_label)
+            self.answer_label = None
+
+        if self.ball:
+            Animation.cancel_all(self.ball)
 
         self._reset_to_initial_state()
 
     def _setup_ui(self):
+        # Добавляем фон (поверх него будет кнопка от BaseGameScreen)
         if os.path.exists(self.background_path):
             bg = Image(source=self.background_path, allow_stretch=True,
                       keep_ratio=False, size_hint=(1, 1))
             self.layout.add_widget(bg, index=0)
 
+        # Создаём мяч
         self._create_ball()
 
     def _create_ball(self):
@@ -799,13 +869,14 @@ class MagicBallScreen(BaseGameScreen):
                 self.is_stopping = True
                 Clock.schedule_once(self._rollback_ball, 0.2)
 
-    def _bring_back_button_to_front(self):
-        if hasattr(self, 'back_button') and self.back_button:
-            if self.back_button in self.layout.children:
-                self.layout.remove_widget(self.back_button)
-            self.layout.add_widget(self.back_button)
-
     def on_touch_down(self, touch):
+        # Проверяем нажатие на кнопку назад (которая теперь из BaseGameScreen)
+        if hasattr(self, 'back_button') and self.back_button:
+            if self.back_button.collide_point(touch.x, touch.y):
+                print("[DEBUG] Back button pressed")
+                self.go_to_menu()
+                return True
+
         if self.waiting_for_touch:
             self._animate_ball_roll_in()
             return True
@@ -851,5 +922,16 @@ class MagicBallScreen(BaseGameScreen):
         return super().on_touch_up(touch)
 
     def go_to_menu(self, instance=None):
-        self._reset_to_initial_state()
-        super().go_to_menu()
+        print("[DEBUG] go_to_menu called")
+
+        Clock.unschedule(self._update_physics)
+        Clock.unschedule(self._update_zoom_animation)
+        Clock.unschedule(self._animate_ball_fall)
+        Clock.unschedule(self._show_random_answer)
+
+        if self.ball:
+            Animation.cancel_all(self.ball)
+
+        self.play_back_sound()
+        self.sound_manager.fade_to(1.0, duration=0.5)
+        self.manager.current = 'menu'

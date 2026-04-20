@@ -6,7 +6,7 @@ from kivy.animation import Animation
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.image import Image as KivyImage
 from kivy.graphics import Rotate, PushMatrix, PopMatrix
-from sound_manager import SoundManager  # Импортируем SoundManager
+from sound_manager import SoundManager
 import os
 
 
@@ -17,13 +17,13 @@ class BaseGameScreen(Screen):
     sound_file = StringProperty('')
 
     # Флаг для определения, является ли экран игровым (нужно для регулировки громкости)
-    is_game_screen = True  # По умолчанию True для игровых экранов
-
-    # Флаг для специальной настройки кнопки назад (для CoinScreen)
-    custom_back_button = False  # По умолчанию False для всех экранов
+    is_game_screen = True
 
     def __init__(self, **kwargs):
+        # Извлекаем screen_params перед вызовом super()
+        self.screen_params = kwargs.pop('screen_params', None)
         super().__init__(**kwargs)
+
         self.layout = FloatLayout()
 
         # Музыка/звук
@@ -56,7 +56,7 @@ class BaseGameScreen(Screen):
         if os.path.exists(sound_path):
             self.back_sound = SoundLoader.load(sound_path)
             if self.back_sound:
-                self.back_sound.volume = 0.8  # Громкость для звука кнопки
+                self.back_sound.volume = 0.8
                 print(f"✅ Loaded back button sound: {sound_path}")
             else:
                 print(f"⚠️ Failed to load back button sound: {sound_path}")
@@ -70,37 +70,59 @@ class BaseGameScreen(Screen):
                 self.back_sound.play()
                 print("🔊 Playing back button sound")
             except:
-                pass  # Игнорируем ошибки при воспроизведении
+                pass
 
     def _on_size_change(self, instance, value):
         """Обновление позиций при изменении размера"""
-        pass
+        # Обновляем позицию кнопки при изменении размера экрана
+        if self.back_button:
+            Clock.schedule_once(lambda dt: self._update_button_position(), 0.05)
+
+    def _update_button_position(self):
+        """Обновляет позицию кнопки при изменении размера экрана"""
+        if self.back_button:
+            # Получаем реальную ширину экрана
+            from kivy.utils import platform
+            from kivy.core.window import Window
+
+            if platform == 'android':
+                real_width = Window.system_size[0]
+                real_height = Window.system_size[1]
+            else:
+                if self.screen_params:
+                    real_width = self.screen_params.width
+                    real_height = self.screen_params.height
+                else:
+                    real_width = Window.width
+                    real_height = Window.height
+
+            btn_size = real_width * 0.1  # 10% от реальной ширины
+            btn_x = real_width * 0.1   # 5% от левого края
+            btn_y = real_height * 0.05  # 5% от нижнего края
+
+            self.back_button.size = (btn_size, btn_size)
+            self.back_button.pos = (btn_x, btn_y)
 
     def on_enter(self):
         """При входе на экран"""
         self.setup_background()
         self.setup_sound()
-        self.create_back_button()  # Создает кнопку с учетом флага custom_back_button
+        # Небольшая задержка перед созданием кнопки
+        Clock.schedule_once(lambda dt: self.create_back_button(), 0.05)
 
-        # Если это игровой экран, плавно убавляем фоновую музыку
         if self.is_game_screen:
-            self.sound_manager.fade_to(0.05, duration=1.0)  # Убавляем до 5% за 1 секунду
+            self.sound_manager.fade_to(0.05, duration=1.0)
 
     def on_leave(self):
         """При выходе с экрана"""
         self.stop_sound()
 
-        # Если это игровой экран, возвращаем громкость при выходе
         if self.is_game_screen:
-            self.sound_manager.fade_to(1.0, duration=1.0)  # Возвращаем до 100% за 1 секунду
+            self.sound_manager.fade_to(1.0, duration=1.0)
 
     def go_to_menu(self):
-        """Возврат в меню"""
-        # Воспроизводим звук кнопки назад
-        self.play_back_sound()
-
+        """Возврат в меню (БЕЗ ЗВУКА - звук уже в кнопке)"""
         self.stop_sound()
-        # Возвращаем громкость перед переходом в меню
         self.sound_manager.fade_to(1.0, duration=0.5)
         self.manager.current = 'menu'
 
@@ -113,7 +135,8 @@ class BaseGameScreen(Screen):
         self.bg_image = Image(
             source=self.background_image,
             allow_stretch=True,
-            keep_ratio=False
+            keep_ratio=False,
+            size_hint=(1, 1)
         )
         self.layout.add_widget(self.bg_image)
 
@@ -134,79 +157,60 @@ class BaseGameScreen(Screen):
             self.sound = None
 
     def create_back_button(self):
-        """Создает кнопку возврата в меню с учетом флага custom_back_button"""
-        if self.custom_back_button:
-            # Для CoinScreen - специальная кнопка
-            self._create_custom_back_button()
-        else:
-            # Для всех остальных экранов - обычная кнопка
-            self._create_standard_back_button()
+        """Создает единую кнопку возврата в меню для всех экранов"""
+        # Удаляем старую кнопку если есть
+        if self.back_button and self.back_button in self.layout.children:
+            self.layout.remove_widget(self.back_button)
 
-    def _create_standard_back_button(self):
-        """Создает стандартную кнопку возврата в меню (оригинальная позиция)"""
+        self._create_unified_back_button()
+
+    def _create_unified_back_button(self):
+        """Создает единую кнопку возврата в меню для всех экранов"""
 
         class ImageButton(ButtonBehavior, KivyImage):
             pass
+
+        # Получаем реальные размеры экрана
+        from kivy.utils import platform
+        from kivy.core.window import Window
+
+        if platform == 'android':
+            # На телефоне используем реальные пиксели
+            real_width = Window.system_size[0]
+            real_height = Window.system_size[1]
+            print(f"[DEBUG] Android real size: {real_width}x{real_height}")
+        else:
+            # На компьютере используем screen_params или Window.size
+            if self.screen_params and self.screen_params.width > 0:
+                real_width = self.screen_params.width
+                real_height = self.screen_params.height
+            else:
+                real_width = Window.width
+                real_height = Window.height
+            print(f"[DEBUG] Computer size: {real_width}x{real_height}")
+
+        # Размер кнопки = 10% от реальной ширины экрана
+        btn_size = real_width * 0.1
+        # Позиция: левый нижний угол с отступом 5%
+        btn_x = real_width * 0.1   # ← измените этот коэффициент для сдвига по горизонтали
+        btn_y = real_height * 0.05  # ← измените этот коэффициент для сдвига по вертикали
+
+        print(f"[DEBUG] Back button: size={btn_size}, pos=({btn_x}, {btn_y})")
 
         back_btn = ImageButton(
             source='assets/images/buttons/Orange_back_to_menu_button.png',
             size_hint=(None, None),
-            size=(60, 60),
-            pos_hint={'x': 0.09, 'y': 0.055},  # Оригинальная позиция
+            size=(btn_size, btn_size),
+            pos=(btn_x, btn_y),
             allow_stretch=True
         )
 
-        # Анимация при нажатии
         def on_press(instance):
             Animation(opacity=0.7, duration=0.1).start(instance)
 
         def on_release(instance):
             Animation(opacity=1.0, duration=0.1).start(instance)
-            Clock.schedule_once(lambda dt: self.go_to_menu(), 0.1)
-        back_btn.bind(on_press=on_press)
-        back_btn.bind(on_release=on_release)
-
-        self.back_button = back_btn
-        self.layout.add_widget(back_btn)
-
-    def _create_custom_back_button(self):
-        """Создает кастомную кнопку возврата в меню (левый верхний угол, повернутая на 90°)"""
-
-        class ImageButton(ButtonBehavior, KivyImage):
-            pass
-
-        back_btn = ImageButton(
-            source='assets/images/buttons/bronze_button.png',
-            size_hint=(None, None),
-            size=(60, 60),
-            pos_hint={'x': 0.02, 'y': 0.88},  # Левый верхний угол
-            allow_stretch=True
-        )
-
-        # Поворачиваем кнопку на 90 градусов
-        def apply_rotation(btn):
-            """Применяет поворот к кнопке"""
-            btn.canvas.before.clear()
-            btn.canvas.after.clear()
-            with btn.canvas.before:
-                PushMatrix()
-                Rotate(angle=90, origin=(btn.width / 2, btn.height / 2))
-            with btn.canvas.after:
-                PopMatrix()
-
-        # Применяем поворот сразу
-        apply_rotation(back_btn)
-
-        # Обновляем поворот при изменении размера
-        back_btn.bind(size=lambda instance, value: apply_rotation(instance))
-
-        # Анимация при нажатии
-        def on_press(instance):
-            Animation(opacity=0.7, duration=0.1).start(instance)
-
-        def on_release(instance):
-            Animation(opacity=1.0, duration=0.1).start(instance)
-            # Воспроизводим звук перед переходом
+            # ЗВУК ТОЛЬКО ЗДЕСЬ
             self.play_back_sound()
             Clock.schedule_once(lambda dt: self.go_to_menu(), 0.1)
 
@@ -215,6 +219,20 @@ class BaseGameScreen(Screen):
 
         self.back_button = back_btn
         self.layout.add_widget(back_btn)
+        print(f"[DEBUG] Button added at pos={back_btn.pos}, size={back_btn.size}")
+
+    def on_touch_down(self, touch):
+        """Обработка касаний на всех экранах"""
+        # Проверяем нажатие на кнопку назад
+        if hasattr(self, 'back_button') and self.back_button:
+            if self.back_button.collide_point(touch.x, touch.y):
+                print("[DEBUG] Back button pressed")
+                # Эмулируем нажатие на кнопку
+                self.back_button.on_touch_down(touch)
+                return True
+
+        # Если кнопка не нажата, передаём обработку дальше
+        return super().on_touch_down(touch)
 
     def start_game(self):
         """Метод для запуска игры (может быть переопределен в дочерних классах)"""

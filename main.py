@@ -16,6 +16,7 @@ from kivy.uix.boxlayout import BoxLayout
 if platform == 'android':
     try:
         from android.permissions import request_permissions, Permission
+
         request_permissions([
             Permission.INTERNET,
             Permission.WRITE_EXTERNAL_STORAGE,
@@ -91,6 +92,58 @@ except ImportError as e:
     RSPScreen = None
 
 
+class ScreenParams:
+    """Класс для хранения параметров экрана и коэффициентов масштабирования"""
+
+    def __init__(self):
+        from kivy.core.window import Window
+        from kivy.utils import platform
+
+        # Получаем РЕАЛЬНЫЙ размер экрана в пикселях
+        if platform == 'android':
+            # На Android используем физические пиксели
+            self.width, self.height = Window.system_size
+        else:
+            # На компьютере тоже используем system_size, если он есть
+            if hasattr(Window, 'system_size') and Window.system_size[0] > 0:
+                self.width, self.height = Window.system_size
+            else:
+                # Fallback для старых версий Kivy
+                self.width, self.height = Window.width, Window.height
+
+        self.aspect_ratio = self.width / self.height
+        self.is_phone = platform == 'android'
+        self.is_tablet = self.width > 600 if self.is_phone else False
+
+        # Эталонные размеры (для масштабирования других элементов)
+        self.base_width = 400
+        self.base_height = 700
+
+        # Коэффициенты масштабирования относительно эталонных размеров
+        self.scale_x = self.width / self.base_width
+        self.scale_y = self.height / self.base_height
+        self.scale = min(self.scale_x, self.scale_y)
+
+        print(f"[DEBUG] Screen params: {self.width}x{self.height}, scale={self.scale:.2f}")
+        print(f"[DEBUG] Device: {'Phone' if self.is_phone else 'Computer'}")
+
+    def get_size(self, width, height):
+        """Возвращает размеры, масштабированные относительно экрана"""
+        return (width * self.scale, height * self.scale)
+
+    def get_x(self, x):
+        """Возвращает координату X, масштабированную относительно экрана"""
+        return x * self.scale_x
+
+    def get_y(self, y):
+        """Возвращает координату Y, масштабированную относительно экрана"""
+        return y * self.scale_y
+
+    def get_font_size(self, size):
+        """Возвращает размер шрифта, масштабированный относительно экрана"""
+        return size * self.scale
+
+
 class UpdateManager:
     """Класс для обновления APK через Wi-Fi"""
 
@@ -102,6 +155,7 @@ class UpdateManager:
 
     def check_for_updates(self, show_notification=True):
         """Проверка наличия новой версии APK на сервере"""
+
         def check():
             try:
                 version_url = f"{self.server_url}/version.json"
@@ -250,6 +304,9 @@ class SportsGameApp(App):
 
         Window.clearcolor = (0.1, 0.1, 0.1, 1)
 
+        # --- СОЗДАЁМ ОБЪЕКТ С ПАРАМЕТРАМИ ЭКРАНА ---
+        self.screen_params = ScreenParams()
+
         # Инициализация менеджеров
         self.lang = LanguageManager()
         self.sound_mgr = SoundManager()
@@ -266,7 +323,7 @@ class SportsGameApp(App):
         except Exception as e:
             print(f"Ошибка инициализации звука: {e}")
 
-        # Экраны
+        # Экраны (передаём параметры экрана в каждый)
         self.sm = ScreenManager(transition=FadeTransition(duration=0.3))
 
         screens_to_add = [
@@ -287,7 +344,8 @@ class SportsGameApp(App):
         for name, screen_class in screens_to_add:
             if screen_class is not None:
                 try:
-                    self.sm.add_widget(screen_class(name=name))
+                    # Передаём screen_params в каждый экран
+                    self.sm.add_widget(screen_class(name=name, screen_params=self.screen_params))
                     print(f"[DEBUG] Screen added: {name}")
                 except Exception as e:
                     print(f"Ошибка добавления экрана {name}: {e}")
