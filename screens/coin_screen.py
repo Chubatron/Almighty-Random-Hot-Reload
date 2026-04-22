@@ -24,7 +24,7 @@ class AdaptiveBackground(Image):
         super().__init__(**kwargs)
         self.source = source
         self.allow_stretch = True
-        self.keep_ratio = False  # Не сохраняем пропорции - растягиваем на весь экран
+        self.keep_ratio = False
         self.size_hint = (1, 1)
         self.pos_hint = {'x': 0, 'y': 0}
 
@@ -414,15 +414,26 @@ class SpritesheetCoin(Image):
 
 
 class FinalSpritesheetCoin(Image):
-    """Монета для финальной анимации из спрайт-листа 6x6 (36 кадров)"""
+    """Монета для финальной анимации из спрайт-листа 6x6 (36 кадров) с тенью"""
     current_frame = NumericProperty(0)
     is_animating = BooleanProperty(False)
     frames = ListProperty([])
     rotation_angle = NumericProperty(270)
+
+    # Параметры тени
+    shadow_offset_x = NumericProperty(0)
+    shadow_offset_y = NumericProperty(0)
+    shadow_scale_y = NumericProperty(1)
+    shadow_alpha = NumericProperty(0.6)
+    coin_opacity = NumericProperty(1.0)
+
     debug_mode = BooleanProperty(False)
+    _updating = BooleanProperty(False)
 
     def __init__(self, spritesheet_path, frame_width=128, frame_height=128,
-                 cols=6, rows=6, total_frames=36, start_frame=0, debug=False, **kwargs):
+                 cols=6, rows=6, total_frames=36, start_frame=0,
+                 shadow_offset_x=0, shadow_offset_y=0,
+                 shadow_scale_y=1.0, shadow_alpha=0.6, coin_opacity=1.0, debug=False, **kwargs):
         super().__init__(**kwargs)
         self.frame_width = frame_width
         self.frame_height = frame_height
@@ -433,9 +444,21 @@ class FinalSpritesheetCoin(Image):
         self.anim_clock = None
         self.current_fps = 60
         self.debug_mode = debug
+        self.shadow_offset_x = shadow_offset_x
+        self.shadow_offset_y = shadow_offset_y
+        self.shadow_scale_y = shadow_scale_y
+        self.shadow_alpha = shadow_alpha
+        self.coin_opacity = coin_opacity
+
         self.load_spritesheet(spritesheet_path)
+
         self.bind(texture=self._update_display)
         self.bind(pos=self._update_display, size=self._update_display)
+        self.bind(shadow_offset_x=self._update_display,
+                  shadow_offset_y=self._update_display,
+                  shadow_scale_y=self._update_display,
+                  shadow_alpha=self._update_display,
+                  coin_opacity=self._update_display)
 
     def load_spritesheet(self, spritesheet_path):
         if not os.path.exists(spritesheet_path):
@@ -499,21 +522,44 @@ class FinalSpritesheetCoin(Image):
             self.anim_clock = None
 
     def _update_display(self, *args):
+        """Обновляет отображение с поворотом на 270 градусов и тенью"""
         if not self.texture:
             return
         if self.width <= 0 or self.height <= 0:
             return
+        if self._updating:
+            return
+        self._updating = True
+
         self.canvas.clear()
+
         center_x = self.x + self.width / 2
         center_y = self.y + self.height / 2
+
         with self.canvas:
+            # ===== ТЕНЬ (смещена по оси X) =====
+            PushMatrix()
+            Translate(center_x, center_y)
+            Rotate(angle=self.rotation_angle, origin=(0, 0))
+            Translate(self.shadow_offset_x, self.shadow_offset_y)
+            Scale(1, -abs(self.shadow_scale_y), 1)
+            Translate(-center_x, -center_y)
+
+            Color(0, 0, 0, self.shadow_alpha)
+            Rectangle(texture=self.texture, pos=self.pos, size=self.size)
+            PopMatrix()
+
+            # ===== МОНЕТА =====
             PushMatrix()
             Translate(center_x, center_y)
             Rotate(angle=self.rotation_angle, origin=(0, 0))
             Translate(-center_x, -center_y)
-            Color(1, 1, 1, 1)
+
+            Color(1.3, 1.3, 1.3, self.coin_opacity)
             Rectangle(texture=self.texture, pos=self.pos, size=self.size)
             PopMatrix()
+
+        self._updating = False
 
     def cleanup(self):
         self.stop_animation()
@@ -600,22 +646,14 @@ class CoinScreen(BaseGameScreen):
         """
         screen_width, screen_height = self.get_screen_size()
 
-        # Длинная ось (по вертикали) - 80% от высоты экрана
-        # В относительных координатах (0-1) это 0.8
-        # Смещение от центра: делим на 2
-        radius_y = 0.35  # 80% / 2 = 40%
+        radius_y = 0.35
+        radius_x = 0.2
 
-        # Короткая ось (по горизонтали) - 40% от ширины экрана
-        # Смещение от центра: делим на 2
-        radius_x = 0.2  # 40% / 2 = 20%
-
-        # Учтем соотношение сторон экрана
         aspect_ratio = screen_width / screen_height
 
-        # Корректируем радиусы в зависимости от соотношения сторон
-        if aspect_ratio > 1.5:  # Очень широкий экран
+        if aspect_ratio > 1.5:
             radius_x = min(radius_x * 1.2, 0.35)
-        elif aspect_ratio < 0.7:  # Очень узкий экран
+        elif aspect_ratio < 0.7:
             radius_y = min(radius_y * 1.2, 0.55)
 
         print(f"[DEBUG] Screen: {screen_width}x{screen_height}, aspect={aspect_ratio:.2f}")
@@ -906,6 +944,7 @@ class CoinScreen(BaseGameScreen):
 
         self.layout.add_widget(self.coin)
 
+        # СОЗДАЕМ ФИНАЛЬНУЮ МОНЕТУ С ПОДДЕРЖКОЙ ТЕНИ
         self.final_coin = FinalSpritesheetCoin(
             spritesheet_path=self.final_spritesheet_orel,
             frame_width=128,
@@ -918,6 +957,11 @@ class CoinScreen(BaseGameScreen):
             size=(self.final_coin_size, self.final_coin_size),
             pos_hint={'center_x': 0.5, 'center_y': 0.5},
             allow_stretch=True,
+            shadow_offset_x=0,
+            shadow_offset_y=self.initial_shadow_offset,
+            shadow_scale_y=1.0,
+            shadow_alpha=0.5,
+            coin_opacity=1.0,
             opacity=0,
             debug=self.debug_mode
         )
@@ -1108,37 +1152,68 @@ class CoinScreen(BaseGameScreen):
             return
         if self.coin:
             self.coin.stop_animation()
-            self.coin.opacity = 1
+            # НЕ ВОССТАНАВЛИВАЕМ ВИДИМОСТЬ МОНЕТЫ! Она будет скрыта в start_final_animation
+            # self.coin.opacity = 1  <- УБИРАЕМ ЭТУ СТРОКУ
         Clock.schedule_once(lambda dt: self.start_final_animation(result)
-        if self.coin is not None and not self.return_animation_active else None, 2.0)
+        if self.coin is not None and not self.return_animation_active else None, 0.5)
 
     def start_final_animation(self, result):
+        """Запускает финальную анимацию - монета увеличивается, тень смещается по оси X"""
         if self.final_coin is None:
             return
+
+        # СРАЗУ СКРЫВАЕМ ОСНОВНУЮ МОНЕТУ
         if self.coin:
             self.coin.opacity = 0
-        Clock.schedule_once(lambda dt: self.play_crystal_sound(), 1.5)
 
+        # Запускаем звук
+        self.play_crystal_sound()
+
+        # Выбираем нужный спрайт-лист
         if result == 0:
             final_spritesheet = self.final_spritesheet_orel
         else:
             final_spritesheet = self.final_spritesheet_reshka
 
+        # Загружаем спрайт-лист
         self.final_coin.load_spritesheet(final_spritesheet)
-        target_size = self.coin_height * 4
+
+        # Сбрасываем параметры финальной монеты
         self.final_coin.opacity = 1
         self.final_coin.size = (self.coin_height, self.coin_height)
         self.final_coin.pos_hint = {'center_x': self.center_pos_x, 'center_y': self.center_pos_y}
+
+        # Устанавливаем параметры тени (смещение по оси X)
+        self.final_coin.shadow_offset_x = 0
+        self.final_coin.shadow_offset_y = self.initial_shadow_offset
+        self.final_coin.shadow_scale_y = 1.0
+        self.final_coin.shadow_alpha = 0.5
+        self.final_coin.coin_opacity = 1.0
+
+        # Принудительно обновляем позицию
         self.final_coin.pos = self.final_coin.pos
         self.final_coin.size = self.final_coin.size
 
+        # Длительность анимации
         animation_duration = 1.5
+        target_size = self.final_coin_size
+
+        # Запускаем анимацию кадров
         frame_fps = 36 / animation_duration
         self.final_coin.start_animation(fps=frame_fps, loop=False)
 
+        # Анимация монеты (без изменений)
         grow_anim = Animation(
             size=(target_size, target_size),
             pos_hint={'center_x': 0.5, 'center_y': 0.5},
+            duration=animation_duration,
+            t='linear'
+        )
+
+        # АНИМАЦИЯ ТЕНИ: смещается по оси X (влево)
+        shadow_move_anim = Animation(
+            shadow_offset_y=-self.coin_height * 15,  # Смещаем тень влево по оси Y
+            shadow_alpha=0.5,  # Тень становится прозрачнее
             duration=animation_duration,
             t='linear'
         )
@@ -1152,6 +1227,8 @@ class CoinScreen(BaseGameScreen):
 
         grow_anim.bind(on_complete=on_grow_complete)
         grow_anim.start(self.final_coin)
+        shadow_move_anim.start(self.final_coin)
+
         self.stop_flip_sound()
         self.current_side = result
 
@@ -1179,7 +1256,7 @@ class CoinScreen(BaseGameScreen):
 
             # Сначала устанавливаем тень ДАЛЕКО ЗА ПРЕДЕЛЫ ЭКРАНА (сверху)
             self.coin.shadow_offset_x = 0
-            self.coin.shadow_offset_y = -Window.height  # Смещаем тень далеко вверх за экран
+            self.coin.shadow_offset_y = -Window.height
             self.coin.shadow_scale_y = 1.0
             self.coin.shadow_alpha = 0.5
 
@@ -1196,19 +1273,17 @@ class CoinScreen(BaseGameScreen):
         )
 
         # Анимация тени: плавный возврат в нормальное положение
-        # Тень "падает" с неба вместе с монетой
         shadow_return_anim = Animation(
-            shadow_offset_y=self.initial_shadow_offset,  # Возвращаем в нормальное положение
-            shadow_offset_x=0,  # Центрируем по X
-            duration=1.2,  # Та же длительность, что и у анимации монеты
-            t='out_quad'  # Плавное замедление в конце
+            shadow_offset_y=self.initial_shadow_offset,
+            shadow_offset_x=0,
+            duration=1.2,
+            t='out_quad'
         )
 
         def on_return_complete(animation, coin):
             self.return_animation_active = False
             self.set_animating_state(False)
 
-        # Привязываем колбэк
         return_anim.bind(on_complete=on_return_complete)
 
         # Запускаем анимации
