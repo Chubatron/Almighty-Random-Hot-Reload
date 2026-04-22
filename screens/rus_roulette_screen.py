@@ -294,7 +294,7 @@ class ChamberModal(ModalView):
 
 class RusRouletteScreen(BaseGameScreen):
     """Реалистичная русская рулетка с жестовым управлением"""
-
+#
     background_image = 'assets/backgrounds/rus_roulette_bg_1024x1024.jpg'
 
     def __init__(self, **kwargs):
