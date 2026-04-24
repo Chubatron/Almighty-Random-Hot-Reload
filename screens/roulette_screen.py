@@ -1,3 +1,4 @@
+import os
 import math
 import random
 from kivy.animation import Animation
@@ -9,11 +10,63 @@ from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.widget import Widget
 from kivy.uix.popup import Popup
-from kivy.graphics import Color, Rectangle
+from kivy.graphics import Color, Rectangle, Ellipse, Line
 from screens.base_game_screen import BaseGameScreen
 from kivy.properties import NumericProperty
 from kivy.graphics import Rotate, PushMatrix, PopMatrix
 from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.utils import platform
+
+
+class AdaptiveBackground(Image):
+    """
+    Адаптивный фон, который сохраняет пропорции и не растягивается.
+    """
+
+    def __init__(self, source='', **kwargs):
+        super().__init__(**kwargs)
+        self.source = source
+        self.allow_stretch = True
+        self.keep_ratio = True
+        self.size_hint = (None, None)
+
+        Window.bind(on_resize=self._on_window_resize)
+        self.bind(texture=self._on_texture_loaded)
+
+        Clock.schedule_once(lambda dt: self._update_display(), 0.1)
+
+    def _on_texture_loaded(self, instance, value):
+        Clock.schedule_once(lambda dt: self._update_display(), 0.1)
+
+    def _on_window_resize(self, window, width, height):
+        Clock.schedule_once(lambda dt: self._update_display(), 0.05)
+
+    def _update_display(self, *args):
+        if not self.texture:
+            return
+
+        if Window.width <= 0 or Window.height <= 0:
+            return
+
+        tex_w = self.texture.width
+        tex_h = self.texture.height
+
+        if tex_w == 0 or tex_h == 0:
+            return
+
+        screen_w = Window.width
+        screen_h = Window.height
+
+        scale_w = screen_w / tex_w
+        scale_h = screen_h / tex_h
+        scale = max(scale_w, scale_h)
+
+        self.width = tex_w * scale
+        self.height = tex_h * scale
+
+        self.x = (screen_w - self.width) / 2
+        self.y = (screen_h - self.height) / 2
 
 
 class RotatingImage(Image):
@@ -22,20 +75,15 @@ class RotatingImage(Image):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        # Инициализируем графические инструкции
         self._rotate = None
         self._setup_graphics()
-
-        # Привязываем обновление центра вращения И угла!
         self.bind(
             pos=self._update_origin,
             size=self._update_origin,
-            angle=self._update_angle  # Добавьте эту строку!
+            angle=self._update_angle
         )
 
     def _setup_graphics(self):
-        """Настраиваем графические инструкции для вращения"""
         with self.canvas.before:
             PushMatrix()
             self._rotate = Rotate(angle=self.angle, origin=self.center)
@@ -43,18 +91,14 @@ class RotatingImage(Image):
             PopMatrix()
 
     def _update_angle(self, instance, value):
-        """Обновляет угол вращения"""
         if self._rotate:
             self._rotate.angle = value
 
     def _update_origin(self, *args):
-        """Обновляет центр вращения - теперь точно центр виджета"""
         if self._rotate:
-            # Вычисляем абсолютный центр виджета
             center_x = self.x + self.width / 2
             center_y = self.y + self.height / 2
             self._rotate.origin = (center_x, center_y)
-            print(f"Center updated: ({center_x}, {center_y})")
 
 
 class ToggleButtonWithLabel(ButtonBehavior, FloatLayout):
@@ -62,23 +106,20 @@ class ToggleButtonWithLabel(ButtonBehavior, FloatLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Убираем size_hint, чтобы кнопка не растягивалась на весь экран
-        self.size_hint = (None, None)  # Отключаем автоматическое растягивание
-        self.size = (150, 50)  # Размер кнопки 100x20
+        self.size_hint = (None, None)
+        self.size = (150, 50)
 
-        # Изображение как фон - растягиваем на всю кнопку
         self.bg_image = Image(
             source='',
-            size_hint=(1, 1),  # Растягиваем на всю кнопку
+            size_hint=(1, 1),
             pos_hint={'x': 0, 'y': 0},
             allow_stretch=True,
-            keep_ratio=False  # Отключаем сохранение пропорций для заполнения всей кнопки
+            keep_ratio=False
         )
 
-        # Текст по центру поверх изображения
         self.label = Label(
             text='',
-            font_size='20sp',  # Уменьшаем размер шрифта для маленькой кнопки
+            font_size='20sp',
             bold=True,
             color=(1, 1, 1, 1),
             size_hint=(1, 1),
@@ -93,7 +134,6 @@ class ToggleButtonWithLabel(ButtonBehavior, FloatLayout):
 
     @property
     def icon(self):
-        """Для совместимости с существующим кодом"""
         return self.bg_image
 
     @icon.setter
@@ -105,42 +145,66 @@ class ImageButton(ButtonBehavior, Image):
     pass
 
 
+class DebugHighlight(Widget):
+    """Виджет для отладки - подсвечивает область нажатия"""
+
+    def __init__(self, color, **kwargs):
+        super().__init__(**kwargs)
+        self.color = color
+        self.bind(pos=self._update, size=self._update)
+        Clock.schedule_once(lambda dt: self._update(), 0.1)
+
+    def _update(self, *args):
+        self.canvas.clear()
+        with self.canvas:
+            Color(*self.color)
+            Line(rectangle=(self.x, self.y, self.width, self.height), width=2)
+            Color(*self.color[:3], 0.2)
+            Rectangle(pos=self.pos, size=self.size)
+
+
 class RouletteScreen(BaseGameScreen):
     """Экран рулетки - только колесо и запуск"""
+
+    # Флаг отладки - установите False чтобы отключить подсветку
+    DEBUG_MODE = True
 
     def __init__(self, game_manager=None, **kwargs):
         super().__init__(**kwargs)
         self.name = 'roulette'
-        self.background_image = 'assets/backgrounds/roulette_bg.jpg'
         self.sound_file = 'assets/sounds/roulette_music.mp3'
 
-        # Тип рулетки: 'european' (0-36) или 'american' (0, 00, 1-36)
-        self.roulette_type = 'european'  # По умолчанию европейская
+        self.adaptive_bg = None
+        self.roulette_type = 'european'
 
-        # Колесо рулетки
         self.wheel = None
+        self.wheel_container = None
         self.is_spinning = False
         self.current_rotation = 0
-        self.ball_launched = False  # Флаг, был ли запущен шарик
+        self.ball_launched = False
 
-        # Кнопка шарика для вращения
         self.spin_button = None
 
-        # Звуки
-        self.wheel_spin_sound = None  # Звук вращения колеса
-        self.ball_roll_sound = None  # Звук качения шарика
+        self.wheel_spin_sound = None
+        self.ball_roll_sound = None
 
-        # Таймеры
         self.spin_timer = None
         self.ball_timer = None
 
-        # Данные для разных типов рулеток
+        self.debug_wheel_area = None
+        self.debug_click_area = None
+        self.debug_button_area = None
+        self.debug_wheel_image_area = None
+
+        # Плотность экрана
+        self.screen_density = 1.0
+
         self.roulette_data = {
             'european': {
-                'button_image': 'assets/images/buttons/Roulette_switch_button.png',  # ДОБАВ
+                'button_image': 'assets/images/buttons/Roulette_switch_button.png',
                 'name': 'EUROPEAN ROULETTE',
-                'button_text': 'SWITCH',  # Добавьте
-                'button_color': (0.2, 0.4, 0.8, 1),  # Синий цвет - добавьте
+                'button_text': 'SWITCH',
+                'button_color': (0.2, 0.4, 0.8, 1),
                 'numbers': [
                     '0', '32', '15', '19', '4', '21', '2', '25', '17', '34',
                     '6', '27', '13', '36', '11', '30', '8', '23', '10', '5',
@@ -148,7 +212,7 @@ class RouletteScreen(BaseGameScreen):
                     '29', '7', '28', '12', '35', '3', '26'
                 ],
                 'colors': {
-                    '0': (0, 0.5, 0, 1),  # Зеленый
+                    '0': (0, 0.5, 0, 1),
                     '32': (0.8, 0, 0, 1), '15': (0, 0, 0, 1), '19': (0.8, 0, 0, 1),
                     '4': (0, 0, 0, 1), '21': (0.8, 0, 0, 1), '2': (0, 0, 0, 1),
                     '25': (0.8, 0, 0, 1), '17': (0, 0, 0, 1), '34': (0.8, 0, 0, 1),
@@ -164,10 +228,10 @@ class RouletteScreen(BaseGameScreen):
                 }
             },
             'american': {
-                'button_image': 'assets/images/buttons/Roulette_switch_button.png',  # ДОБАВЬТЕ
+                'button_image': 'assets/images/buttons/Roulette_switch_button.png',
                 'name': 'AMERICAN ROULETTE',
-                'button_text': 'SWITCH',  # Добавьте
-                'button_color': (0.8, 0.2, 0.2, 1),  # Красный цвет - добавьте
+                'button_text': 'SWITCH',
+                'button_color': (0.8, 0.2, 0.2, 1),
                 'numbers': [
                     '0', '28', '9', '26', '30', '11', '7', '20', '32', '17',
                     '5', '22', '34', '15', '3', '24', '36', '13', '1', '00',
@@ -175,8 +239,8 @@ class RouletteScreen(BaseGameScreen):
                     '21', '33', '16', '4', '23', '35', '14', '2'
                 ],
                 'colors': {
-                    '0': (0, 0.5, 0, 1),  # Зеленый
-                    '00': (0, 0.5, 0, 1),  # Зеленый
+                    '0': (0, 0.5, 0, 1),
+                    '00': (0, 0.5, 0, 1),
                     '28': (0, 0, 0, 1), '9': (0.8, 0, 0, 1), '26': (0, 0, 0, 1),
                     '30': (0, 0, 0, 1), '11': (0.8, 0, 0, 1), '7': (0.8, 0, 0, 1),
                     '20': (0, 0, 0, 1), '32': (0.8, 0, 0, 1), '17': (0.8, 0, 0, 1),
@@ -193,28 +257,131 @@ class RouletteScreen(BaseGameScreen):
             }
         }
 
-        # Кнопка-переключатель типа рулетки с надписью
         self.type_switch_button = ToggleButtonWithLabel(
             size_hint=(1, 1),
             size=(250, 60),
             pos_hint={'center_x': 0.5, 'center_y': 0.9}
         )
 
+        self.bind(size=self.on_size)
+
+    def on_size(self, *args):
+        Clock.schedule_once(lambda dt: self._force_update_wheel_size(), 0.1)
+
+    def get_device_density(self):
+        """Получает плотность пикселей устройства"""
+        if platform == 'android':
+            try:
+                from jnius import autoclass
+                DisplayMetrics = autoclass('android.util.DisplayMetrics')
+                metrics = DisplayMetrics()
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                activity = PythonActivity.mActivity
+                display = activity.getWindowManager().getDefaultDisplay()
+                display.getRealMetrics(metrics)
+
+                density = metrics.density
+                print(f"\n📱 Плотность экрана (density): {density}")
+                return density
+            except Exception as e:
+                print(f"Ошибка получения плотности: {e}")
+                return 1.0
+        else:
+            return 1.0
+
+    def _get_real_screen_size(self):
+        """Получает реальный размер экрана в логических пикселях Kivy"""
+        if platform == 'android':
+            width, height = Window.width, Window.height
+            self.screen_density = self.get_device_density()
+            return width, height
+        else:
+            width, height = Window.width, Window.height
+            return width, height
+
+    def _force_update_wheel_size(self):
+        """Принудительно обновляет размер контейнера и колеса"""
+        if self.wheel_container:
+            screen_width, screen_height = self._get_real_screen_size()
+
+            # Для телефона используем больший процент
+            if platform == 'android':
+                container_size = min(screen_width, screen_height) * 0.95
+                print(f"📱 Телефон: размер контейнера {container_size:.1f} (95% от {min(screen_width, screen_height)})")
+            else:
+                container_size = min(screen_width, screen_height) * 0.85
+                print(
+                    f"💻 Компьютер: размер контейнера {container_size:.1f} (85% от {min(screen_width, screen_height)})")
+
+            container_x = (screen_width - container_size) / 2
+            container_y = (screen_height - container_size) / 2
+
+            self.wheel_container.size = (container_size, container_size)
+            self.wheel_container.pos = (container_x, container_y)
+
+            if self.wheel:
+                self.wheel.canvas.ask_update()
+
+    def get_screen_size(self):
+        return self._get_real_screen_size()
+
     def on_enter(self):
-        """При входе на экран"""
+        if not self.adaptive_bg:
+            self.adaptive_bg = AdaptiveBackground(
+                source='assets/backgrounds/roulette_bg.jpg'
+            )
+            self.layout.add_widget(self.adaptive_bg, index=0)
+
+        if hasattr(self, 'bg_image') and self.bg_image:
+            if self.bg_image in self.layout.children:
+                self.layout.remove_widget(self.bg_image)
+            self.bg_image = None
+
         super().on_enter()
         self.show_wheel_view()
 
-    def show_wheel_view(self):
-        print("Method show_wheel_view called")
-        """Показать вид с вращающимся колесом"""
-        print(f"Экран {self.roulette_data[self.roulette_type]['name']}")
+    def _log_wheel_ratio(self, *args):
+        """Выводит подробную информацию о соотношении размеров колеса и виджета"""
+        if not self.wheel or not self.wheel_container:
+            return
 
-        # Сбрасываем флаги состояния
+        print("\n" + "=" * 60)
+        print("📊 СООТНОШЕНИЕ РАЗМЕРОВ КОЛЕСА И ВИДЖЕТА")
+        print("=" * 60)
+
+        container_w = self.wheel_container.width
+        container_h = self.wheel_container.height
+        wheel_w = self.wheel.width
+        wheel_h = self.wheel.height
+
+        print(f"📦 КОНТЕЙНЕР: {container_w:.1f} x {container_h:.1f}")
+        print(f"🔄 КОЛЕСО: {wheel_w:.1f} x {wheel_h:.1f}")
+
+        ratio_w = wheel_w / container_w if container_w > 0 else 0
+        ratio_h = wheel_h / container_h if container_h > 0 else 0
+
+        print(f"📐 СООТНОШЕНИЕ: {ratio_w:.3f} x {ratio_h:.3f}")
+
+        if abs(ratio_w - 1.0) > 0.01:
+            print(f"   ⚠️ ПРОБЛЕМА! Колесо должно занимать 100% контейнера!")
+        else:
+            print(f"   ✅ Колесо корректно занимает 100% контейнера")
+
+        print(f"🖥 РАЗМЕР ЭКРАНА: {Window.width}x{Window.height}")
+        print("=" * 60 + "\n")
+
+    def show_wheel_view(self):
+        print("\n" + "=" * 60)
+        print("🎡 СОЗДАНИЕ КОЛЕСА РУЛЕТКИ")
+        print("=" * 60)
+
+        print(f"Тип рулетки: {self.roulette_data[self.roulette_type]['name']}")
+
+        screen_width, screen_height = self._get_real_screen_size()
+
         self.is_spinning = False
         self.ball_launched = False
 
-        # Отменяем все таймеры
         if self.spin_timer:
             self.spin_timer.cancel()
             self.spin_timer = None
@@ -223,7 +390,7 @@ class RouletteScreen(BaseGameScreen):
             self.ball_timer = None
 
         self.clear_layout()
-        # Устанавливаем изображение и текст
+
         data = self.roulette_data[self.roulette_type]
         self.type_switch_button.icon.source = data['button_image']
         self.type_switch_button.label.text = data['button_text']
@@ -231,7 +398,6 @@ class RouletteScreen(BaseGameScreen):
         self.type_switch_button.bind(on_press=self.toggle_roulette_type)
         self.layout.add_widget(self.type_switch_button)
 
-        # Заголовок с названием типа рулетки
         title_label = Label(
             text=self.roulette_data[self.roulette_type]['name'],
             font_size='24sp',
@@ -243,347 +409,259 @@ class RouletteScreen(BaseGameScreen):
         )
         self.layout.add_widget(title_label)
 
-        # Создаем контейнер для колеса
-        wheel_container = FloatLayout(
+        # ========== НАСТРОЙКИ КОЛЕСА ==========
+        # Для телефона используем больший процент
+        if platform == 'android':
+            container_size = min(screen_width, screen_height) * 0.95
+            print(f"📱 Телефон: размер контейнера {container_size:.1f} (95% от {min(screen_width, screen_height)})")
+        else:
+            container_size = min(screen_width, screen_height) * 0.85
+            print(f"💻 Компьютер: размер контейнера {container_size:.1f} (85% от {min(screen_width, screen_height)})")
+
+        container_x = (screen_width - container_size) / 2
+        container_y = (screen_height - container_size) / 2
+
+        print(
+            f"📦 КОНТЕЙНЕР: размер {container_size:.1f}x{container_size:.1f}, позиция ({container_x:.1f}, {container_y:.1f})")
+
+        self.wheel_container = FloatLayout(
             size_hint=(None, None),
-            size=(500, 500),
-            pos_hint={'center_x': 0.5, 'center_y': 0.6}
+            size=(container_size, container_size),
+            pos=(container_x, container_y)
         )
 
-        # Создаем колесо рулетки с учетом типа
-        wheel_size = 450 if self.roulette_type == 'american' else 400
-        wheel_source = 'assets/images/Roulette_wheel_00.png' if self.roulette_type == 'american' else 'assets/images/Roulette_wheel_0.png'
+        if self.roulette_type == 'american':
+            wheel_source = 'assets/images/Roulette_wheel_00.png'
+        else:
+            wheel_source = 'assets/images/Roulette_wheel_0.png'
+
+        print(f"🖼 Загрузка изображения: {wheel_source}")
 
         self.wheel = RotatingImage(
             source=wheel_source,
-            size_hint=(None, None),
-            size=(wheel_size, wheel_size),
+            size_hint=(1.0, 1.0),
             pos_hint={'center_x': 0.5, 'center_y': 0.5}
         )
 
-        # Если файл не найден, создаем простую рулетку
-        if not self.wheel.source or 'not found' in str(self.wheel.source).lower():
-            self.create_simple_wheel(wheel_container)
+        self.wheel_container.add_widget(self.wheel)
+        self.layout.add_widget(self.wheel_container)
+
+        Clock.schedule_once(lambda dt: self._force_update_wheel_size(), 0.1)
+        Clock.schedule_once(lambda dt: self._log_wheel_ratio(), 0.3)
+
+        # ========== ПОДСВЕТКА ОБЛАСТЕЙ ДЛЯ ОТЛАДКИ ==========
+        if self.DEBUG_MODE:
+            self.debug_wheel_image_area = DebugHighlight(
+                color=(1, 0, 0, 0.8),
+                size_hint=(1.0, 1.0),
+                pos_hint={'center_x': 0.5, 'center_y': 0.5}
+            )
+            self.wheel_container.add_widget(self.debug_wheel_image_area)
+
+            self.debug_wheel_area = DebugHighlight(
+                color=(0, 0, 1, 0.5),
+                size_hint=(1.0, 1.0),
+                pos_hint={'center_x': 0.5, 'center_y': 0.5}
+            )
+            self.wheel_container.add_widget(self.debug_wheel_area)
+
+            self.debug_click_area = DebugHighlight(
+                color=(1, 1, 0, 0.5),
+                size_hint=(1.0, 1.0),
+                pos_hint={'center_x': 0.5, 'center_y': 0.5}
+            )
+            self.wheel_container.add_widget(self.debug_click_area)
+
+        # ========== НАСТРОЙКИ КНОПКИ ШАРИКА ==========
+        if platform == 'android':
+            button_size = min(screen_width, screen_height) * 0.15
+            print(f"📱 Телефон: кнопка {button_size:.1f} (15% от {min(screen_width, screen_height)})")
         else:
-            wheel_container.add_widget(self.wheel)
+            button_size = min(screen_width, screen_height) * 0.12
+            print(f"💻 Компьютер: кнопка {button_size:.1f} (12% от {min(screen_width, screen_height)})")
 
-        self.layout.add_widget(wheel_container)
-
-        # Кнопка запуска рулетки (изображение белого шарика)
-        self.spin_button = ImageButton(  # Сохраняем ссылку в атрибуте
+        self.spin_button = ImageButton(
             source='assets/images/buttons/Roulette_ball.png',
             size_hint=(None, None),
-            size=(100, 100),
+            size=(button_size, button_size),
             pos_hint={'center_x': 0.5, 'y': 0.05},
             color=(1, 1, 1, 1)
         )
         self.spin_button.bind(on_press=self.spin_wheel)
         self.layout.add_widget(self.spin_button)
 
+        if self.DEBUG_MODE:
+            self.debug_button_area = DebugHighlight(
+                color=(0, 1, 0, 0.5),
+                size_hint=(None, None),
+                size=(button_size, button_size),
+                pos_hint={'center_x': 0.5, 'y': 0.05}
+            )
+            self.layout.add_widget(self.debug_button_area)
+
+        print(f"\n📊 ИТОГОВЫЕ РАЗМЕРЫ:")
+        print(f"   Platform: {platform}")
+        print(f"   Screen: {screen_width}x{screen_height}")
+        print(f"   Container: {container_size:.1f}x{container_size:.1f}")
+        print(f"   Button: {button_size:.1f}x{button_size:.1f}")
+        print("=" * 60 + "\n")
+
     def play_wheel_spin_sound(self):
-        """Воспроизводит звук вращения колеса (один раз)"""
         try:
             if not self.wheel_spin_sound:
                 self.wheel_spin_sound = SoundLoader.load('assets/sounds/Roulette/roulette_drum_revolution.ogg')
                 if not self.wheel_spin_sound:
-                    print("Не удалось загрузить звук: assets/sounds/Roulette/roulette_drum_revolution.ogg")
+                    print("Не удалось загрузить звук вращения колеса")
                     return
-
             if self.wheel_spin_sound:
                 if self.wheel_spin_sound.state == 'play':
                     self.wheel_spin_sound.stop()
-                self.wheel_spin_sound.loop = False  # ИЗМЕНЕНО: было True, стало False
+                self.wheel_spin_sound.loop = False
                 self.wheel_spin_sound.play()
         except Exception as e:
             print(f"Ошибка при воспроизведении звука вращения колеса: {e}")
 
     def play_ball_roll_sound(self):
-        """Воспроизводит звук качения шарика и возвращает его длительность"""
         try:
             if not self.ball_roll_sound:
                 self.ball_roll_sound = SoundLoader.load('assets/sounds/Roulette/ball_throw_american.ogg')
                 if not self.ball_roll_sound:
-                    print("Не удалось загрузить звук: assets/sounds/Roulette/ball_throw_american.ogg")
+                    print("Не удалось загрузить звук качения шарика")
                     return 0
-
             if self.ball_roll_sound:
                 if self.ball_roll_sound.state == 'play':
                     self.ball_roll_sound.stop()
                 self.ball_roll_sound.loop = False
                 self.ball_roll_sound.play()
-
-                # Возвращаем длительность звука в секундах
-                # Если длина неизвестна, используем стандартные 15 секунд
                 sound_length = self.ball_roll_sound.length
-                if sound_length:
-                    return sound_length
-                else:
-                    return 15.0  # Значение по умолчанию
+                return sound_length if sound_length else 15.0
         except Exception as e:
             print(f"Ошибка при воспроизведении звука качения шарика: {e}")
             return 15.0
 
     def toggle_roulette_type(self, instance=None):
-        """Переключить тип рулетки по нажатию кнопки"""
         print("Method toggle_roulette_type() called.")
-
-        # ПРОВЕРЯЕМ, НЕ ВРАЩАЕТСЯ ЛИ КОЛЕСО
         if self.is_spinning:
             print("Колесо вращается, переключение типа запрещено")
-            # Можно показать всплывающее сообщение
             return
-
-        # Сначала меняем тип на противоположный
         new_type = 'american' if self.roulette_type == 'european' else 'european'
         self.roulette_type = new_type
-
-        # Потом получаем данные для нового типа
         data = self.roulette_data[self.roulette_type]
-
-        # Обновляем иконку и текст кнопки
         if hasattr(self, 'type_switch_button') and self.type_switch_button:
             self.type_switch_button.icon.source = data['button_image']
             self.type_switch_button.label.text = data['button_text']
-
-        # Обновляем весь экран
         self.show_wheel_view()
 
     def switch_roulette_type(self, roulette_type):
-        """Альтернативный метод для переключения типа (для совместимости)"""
         if self.roulette_type != roulette_type:
             self.roulette_type = roulette_type
-
-            # Обновляем кнопку если она существует
             if hasattr(self, 'type_switch_button') and self.type_switch_button:
                 data = self.roulette_data[self.roulette_type]
                 self.type_switch_button.icon.source = data['button_image']
                 self.type_switch_button.label.text = data['button_text']
-
             self.show_wheel_view()
 
     def return_to_menu(self, instance=None):
-        """Вернуться в главное меню"""
         self.manager.current = 'menu'
 
     def set_switch_button_state(self, enabled):
-        """Включить/выключить кнопку переключения типа рулетки"""
         if hasattr(self, 'type_switch_button') and self.type_switch_button:
             self.type_switch_button.disabled = not enabled
-            # Опционально: визуальное обозначение неактивной кнопки
-            if enabled:
-                self.type_switch_button.opacity = 1.0
-            else:
-                self.type_switch_button.opacity = 0.5
+            self.type_switch_button.opacity = 1.0 if enabled else 0.5
 
     def spin_wheel(self, instance=None):
-        """Запуск вращения колеса рулетки (без шарика)"""
         if self.is_spinning or not self.wheel:
             return
-
         print(f"🎰 Запускаю вращение колеса {self.roulette_type} рулетки...")
-
-        # ОТКЛЮЧАЕМ КНОПКУ SWITCH
         self.set_switch_button_state(False)
-
-        # Сбрасываем флаг запуска шарика
         self.ball_launched = False
-
-        # Останавливаем все звуки
         self.stop_all_sounds()
-
-        # Запускаем звук вращения колеса
         self.play_wheel_spin_sound()
-
         self.is_spinning = True
-
-        # Нормализуем текущий угол
         current_angle = self.wheel.angle % 360
         self.wheel.angle = current_angle
-
-        # Добавляем случайное количество вращений
-        full_rotations = random.randint(8, 12)  # 8-12 полных оборотов
+        full_rotations = random.randint(8, 12)
         additional_angle = random.randint(0, 360)
         target_angle = current_angle + 360 * full_rotations + additional_angle
-
         print(f"Начальный угол: {current_angle}°, целевой: {target_angle}°")
-
-        # Создаем анимацию
-        anim = Animation(
-            angle=target_angle,
-            duration=16.0,  # 16 секунд вращения
-            t='out_quad'  # Плавное замедление в конце
-        )
-
-        # Привязываем обработчики
+        anim = Animation(angle=target_angle, duration=16.0, t='out_quad')
         anim.bind(on_complete=self._on_wheel_spin_complete)
-
-        # Запускаем анимацию
         anim.start(self.wheel)
-
-        # Сохраняем анимацию для возможной остановки
         self.current_animation = anim
-
-        # Запускаем таймер на случай, если анимация не завершится
         self.spin_timer = Clock.schedule_once(self._force_stop_wheel, 18.0)
 
-    def _on_spin_progress(self, animation, widget, progress):
-        """Обновление вращения во время анимации"""
-        if self.wheel and hasattr(self.wheel, 'canvas'):
-            self.wheel.rotation = self.current_rotation
-            self.wheel.canvas.ask_update()
-
     def launch_ball(self, instance=None):
-        """Запуск шарика в рулетку"""
         if not self.is_spinning or self.ball_launched:
-            # Если колесо не вращается, сначала запускаем его
             if not self.is_spinning:
                 self.spin_wheel()
-
-            # Если шарик уже запущен, игнорируем
             if self.ball_launched:
                 return
-
         print("🎯 Запускаю шарик в рулетку...")
-
-        # Скрываем кнопку шарика с анимацией
         if self.spin_button:
-            anim_hide = Animation(
-                opacity=0,
-                duration=0.3,
-                t='out_cubic'
-            )
+            anim_hide = Animation(opacity=0, duration=0.3, t='out_cubic')
             anim_hide.bind(on_complete=lambda *args: setattr(self.spin_button, 'disabled', True))
             anim_hide.start(self.spin_button)
-
-        # Запускаем звук качения шарика и получаем его длительность
         sound_duration = self.play_ball_roll_sound()
-
         self.ball_launched = True
-
-        # Отменяем предыдущий таймер, если был
         if self.spin_timer:
             self.spin_timer.cancel()
             self.spin_timer = None
-
-        # Запускаем таймер на длительность звука для показа результата
-        # Добавляем небольшую задержку для плавности
         result_delay = sound_duration + 0.5
         self.ball_timer = Clock.schedule_once(self._show_ball_result, result_delay)
-
         print(f"⏱ Результат будет показан через {result_delay} секунд")
 
     def _on_wheel_spin_complete(self, animation, widget):
-        """Когда вращение колеса завершено само (без шарика) - просто останавливаем"""
         print("🛑 Колесо остановилось самостоятельно, шарик не запускался")
-
-        # Отменяем таймер
         if self.spin_timer:
             self.spin_timer.cancel()
             self.spin_timer = None
-
-        # Если шарик не запущен - останавливаем все звуки
         if not self.ball_launched:
             self.stop_all_sounds()
-
-        # ВКЛЮЧАЕМ КНОПКУ SWITCH
         self.set_switch_button_state(True)
-
-        # Сбрасываем флаги
         self.is_spinning = False
 
     def _force_stop_wheel(self, dt):
-        """Принудительная остановка колеса через таймер - без результата"""
         print("⏰ Таймер: принудительная остановка колеса")
-
         if self.is_spinning:
-            # Останавливаем анимацию
             if hasattr(self, 'current_animation') and self.current_animation:
                 self.current_animation.stop(self.wheel)
-
-            # Если шарик не запущен - останавливаем все звуки
             if not self.ball_launched:
                 self.stop_all_sounds()
-
-            # ВКЛЮЧАЕМ КНОПКУ SWITCH
             self.set_switch_button_state(True)
-
-            # Сбрасываем флаги
             self.is_spinning = False
-
-            # НЕ показываем результат, просто останавливаемся
-
         self.spin_timer = None
 
     def _show_ball_result(self, dt):
-        """Показывает результат после запуска шарика"""
         print("🎯 Шарик остановился, показываю результат")
-
-        # Останавливаем звук шарика
         if self.ball_roll_sound:
             self.ball_roll_sound.stop()
-
-        # Останавливаем звук колеса на всякий случай
         if self.wheel_spin_sound:
             self.wheel_spin_sound.stop()
             self.wheel_spin_sound.loop = False
-
-        # Останавливаем анимацию колеса
         if hasattr(self, 'current_animation') and self.current_animation:
             self.current_animation.stop(self.wheel)
-
-        # Сбрасываем флаги
         self.is_spinning = False
         self.ball_launched = False
         self.ball_timer = None
-
-        # ВКЛЮЧАЕМ КНОПКУ SWITCH
         self.set_switch_button_state(True)
-
-        # Получаем случайный результат
         winning_sector = self._get_winning_sector()
-
-        # Показываем результат
         self._show_result(winning_sector)
 
-    def _show_spin_button(self):
-        """Показать кнопку шарика после завершения вращения"""
-        if self.spin_button:
-            # Сначала включаем кнопку
-            self.spin_button.disabled = False
-
-            # Плавно показываем кнопку
-            anim_show = Animation(
-                opacity=1,
-                duration=0.5,
-                t='out_cubic'
-            )
-            anim_show.start(self.spin_button)
-
     def _get_winning_sector(self):
-        """Определяет выигрышный сектор"""
         data = self.roulette_data[self.roulette_type]
         winning_number = random.choice(data['numbers'])
-
-        # Определяем цвет для отображения
         if winning_number in ['0', '00']:
             color_name = 'GREEN'
         elif data['colors'][winning_number] == (0.8, 0, 0, 1):
             color_name = 'RED'
         else:
             color_name = 'BLACK'
-
         return f'{winning_number} {color_name}'
 
     def _show_result(self, result):
-        """Показывает результат рулетки с анимацией масштабирования"""
-        # Создаем FloatLayout для фона и содержимого
         main_layout = FloatLayout()
-
-        # Начальный масштаб для анимации
         main_layout.scale = 0.8
         main_layout.opacity = 0
-
-        # Добавляем фон-изображение для попапа
         try:
             popup_bg = Image(
                 source='assets/images/Out_image.png',
@@ -599,21 +677,13 @@ class RouletteScreen(BaseGameScreen):
                 Color(0.1, 0.1, 0.2, 0.95)
                 Rectangle(size=main_layout.size, pos=main_layout.pos)
             main_layout.bind(size=self._update_rect, pos=self._update_rect)
-
-        # Разделяем результат на число и цвет
         parts = result.split()
         number = parts[0]
         color = parts[1] if len(parts) > 1 else ''
-
-        # Цвет для отображения
-        number_color = (0, 0.5, 0, 1) if color == 'GREEN' else \
-            (0.8, 0, 0, 1) if color == 'RED' else \
-                (0, 0, 0, 1)
-
-        # Выигрышный номер (содержимое попапа)
+        number_color = (0, 0.5, 0, 1) if color == 'GREEN' else (0.8, 0, 0, 1) if color == 'RED' else (0, 0, 0, 1)
         number_label = Label(
             text=number,
-            font_size='96sp',  # Увеличил размер шрифта
+            font_size='96sp',
             bold=True,
             color=number_color,
             size_hint=(None, None),
@@ -623,46 +693,22 @@ class RouletteScreen(BaseGameScreen):
         main_layout.add_widget(number_label)
 
         def dismiss_popup_with_animation(instance):
-            """Плавное закрытие попапа с анимацией"""
-            # Анимация исчезновения с уменьшением масштаба
-            anim_scale = Animation(
-                scale=0.8,
-                opacity=0,
-                duration=0.3,
-                t='out_cubic'
-            )
+            anim_scale = Animation(scale=0.8, opacity=0, duration=0.3, t='out_cubic')
             anim_scale.start(main_layout)
-
-            # Анимация для текста
-            anim_text = Animation(
-                opacity=0,
-                duration=0.3,
-                t='out_cubic'
-            )
+            anim_text = Animation(opacity=0, duration=0.3, t='out_cubic')
             anim_text.start(number_label)
-
-            # Закрываем попап после анимации
             from kivy.clock import Clock
             Clock.schedule_once(lambda dt: self.result_popup.dismiss(), 0.35)
-
-            # Показываем кнопку шарика после закрытия попапа
             Clock.schedule_once(lambda dt: self._show_spin_button(), 0.4)
 
-        # Создаем прозрачную кнопку на весь попап для закрытия
-        close_button = Button(
-            text='',
-            size_hint=(1, 1),
-            background_color=(0, 0, 0, 0),  # Прозрачная
-            background_normal=''
-        )
+        close_button = Button(text='', size_hint=(1, 1), background_color=(0, 0, 0, 0), background_normal='')
         close_button.bind(on_press=dismiss_popup_with_animation)
         main_layout.add_widget(close_button)
 
-        # Создаем попап
         self.result_popup = Popup(
             title='',
             content=main_layout,
-            size_hint=(0.7, 0.7),  # Немного увеличил размер
+            size_hint=(0.7, 0.7),
             pos_hint={'center_x': 0.5, 'center_y': 0.5},
             separator_height=0,
             background='',
@@ -671,52 +717,29 @@ class RouletteScreen(BaseGameScreen):
             opacity=0
         )
 
-        # Функция для плавного открытия попапа
         def animate_popup_open():
-            # Сначала делаем попап видимым
             self.result_popup.opacity = 1
-
-            # Анимация для фона: увеличение масштаба + появление
-            anim_bg = Animation(
-                scale=1,
-                opacity=1,
-                duration=0.4,
-                t='out_back'
-            )
+            anim_bg = Animation(scale=1, opacity=1, duration=0.4, t='out_back')
             anim_bg.start(main_layout)
-
-            # Анимация для текста с задержкой для лучшего эффекта
             from kivy.clock import Clock
             number_label.opacity = 0
             number_label.scale = 1.2
+            anim_text_scale = Animation(scale=1, duration=0.4, t='out_back')
+            anim_text_opacity = Animation(opacity=1, duration=0.4, t='out_cubic')
+            Clock.schedule_once(lambda dt: (anim_text_scale.start(number_label), anim_text_opacity.start(number_label)),
+                                0.15)
 
-            anim_text_scale = Animation(
-                scale=1,
-                duration=0.4,
-                t='out_back'
-            )
-
-            anim_text_opacity = Animation(
-                opacity=1,
-                duration=0.4,
-                t='out_cubic'
-            )
-
-            Clock.schedule_once(
-                lambda dt: (
-                    anim_text_scale.start(number_label),
-                    anim_text_opacity.start(number_label)
-                ),
-                0.15
-            )
-
-        # Открываем попап и запускаем анимацию
         self.result_popup.open()
         animate_popup_open()
 
+    def _show_spin_button(self):
+        if self.spin_button:
+            self.spin_button.disabled = False
+            anim_show = Animation(opacity=1, duration=0.5, t='out_cubic')
+            anim_show.start(self.spin_button)
+
     @staticmethod
     def _update_rect(instance, value):
-        """Обновляет размер прямоугольника фона"""
         if hasattr(instance, 'canvas'):
             instance.canvas.before.clear()
             with instance.canvas.before:
@@ -724,13 +747,11 @@ class RouletteScreen(BaseGameScreen):
                 Rectangle(pos=instance.pos, size=instance.size)
 
     def clear_layout(self):
-        """Очистить layout"""
         for child in self.layout.children[:]:
-            if child not in [self.bg_image, self.back_button]:
+            if child not in [self.adaptive_bg, self.back_button]:
                 self.layout.remove_widget(child)
 
     def create_simple_wheel(self, container):
-        """Создает простую рулетку если нет картинки"""
         from kivy.graphics import Color, Ellipse, Line, Rotate
 
         class SimpleWheel(Widget):
@@ -739,51 +760,35 @@ class RouletteScreen(BaseGameScreen):
             def __init__(self, roulette_type='european', **kwargs):
                 super().__init__(**kwargs)
                 self.roulette_type = roulette_type
-                self.size = (450, 450) if roulette_type == 'american' else (400, 400)
+                self.size_hint = (1.0, 1.0)
                 self.pos_hint = {'center_x': 0.5, 'center_y': 0.5}
-
-                # Установка графических инструкций для вращения
                 with self.canvas.before:
                     PushMatrix()
                     self.rotate_instruction = Rotate(angle=self.angle, origin=self.center)
                 with self.canvas.after:
                     PopMatrix()
-
-                # Привязка обновлений
                 self.bind(pos=self.update_origin, size=self.update_origin, angle=self.update_angle)
-
                 self.draw_wheel()
 
             def update_origin(self, *args):
-                """Обновить центр вращения"""
                 self.rotate_instruction.origin = (self.center_x, self.center_y)
 
             def update_angle(self, *args):
-                """Обновить угол вращения"""
                 self.rotate_instruction.angle = self.angle
 
             def draw_wheel(self):
                 self.canvas.clear()
                 center_x, center_y = self.width / 2, self.height / 2
-
                 with self.canvas:
-                    # Основной круг
                     Color(0.7, 0.1, 0.1, 1)
                     Ellipse(pos=(0, 0), size=self.size)
-
-                    # Внутренний круг
                     Color(0.1, 0.1, 0.1, 1)
                     inner_size = self.size[0] - 100, self.size[1] - 100
                     inner_pos = 50, 50
                     Ellipse(pos=inner_pos, size=inner_size)
-
-                    # Сектора
                     Color(1, 1, 1, 1)
                     radius = min(self.size) / 2 - 50
-
-                    # Разное количество секторов для разных типов
                     sectors = 38 if self.roulette_type == 'american' else 37
-
                     for i in range(sectors):
                         angle = i * (360 / sectors)
                         rad = angle * 3.14159 / 180
@@ -792,8 +797,6 @@ class RouletteScreen(BaseGameScreen):
                         x2 = center_x + radius * 0.7 * math.cos(rad)
                         y2 = center_y + radius * 0.7 * math.sin(rad)
                         Line(points=[x1, y1, x2, y2], width=2)
-
-                    # Центральный индикатор
                     Color(0, 0.5, 0, 1)
                     indicator_size = 20, 20
                     indicator_pos = center_x - 10, center_y - 10
@@ -803,78 +806,43 @@ class RouletteScreen(BaseGameScreen):
         container.add_widget(self.wheel)
 
     def on_touch_down(self, touch):
-        """Обработка касаний"""
-        # Проверяем касание колеса
         if self.wheel and hasattr(self.wheel, 'collide_point') and self.wheel.collide_point(*touch.pos):
             if not self.is_spinning:
-                # Если колесо не вращается - запускаем вращение колеса
                 self.spin_wheel()
-            # Если колесо уже вращается, ничего не делаем при касании колеса
             return True
-
-        # Проверяем касание кнопки шарика
         if self.spin_button and self.spin_button.collide_point(*touch.pos):
             if self.is_spinning and not self.ball_launched:
-                # Если колесо вращается и шарик еще не запущен - запускаем шарик
                 self.launch_ball()
             elif not self.is_spinning:
-                # Если колесо не вращается - сначала запускаем колесо, потом шарик
                 self.spin_wheel()
-                # Запускаем шарик через небольшую задержку, чтобы колесо начало вращаться
                 Clock.schedule_once(lambda dt: self.launch_ball(), 0.5)
             return True
-
         return super().on_touch_down(touch)
 
     def on_leave(self):
-        """При выходе с экрана"""
-        # Останавливаем все звуки
         self.stop_all_sounds()
-
-        # Отменяем все анимации
         Animation.cancel_all(self)
-
-        # Отменяем все таймеры
         if self.spin_timer:
             self.spin_timer.cancel()
             self.spin_timer = None
-
         if self.ball_timer:
             self.ball_timer.cancel()
             self.ball_timer = None
-
-        # СБРАСЫВАЕМ ВСЕ ФЛАГИ СОСТОЯНИЯ!
         self.is_spinning = False
         self.ball_launched = False
-
-        # ВКЛЮЧАЕМ КНОПКУ SWITCH (на случай если она была отключена)
         self.set_switch_button_state(True)
-
-        # Сбрасываем угол колеса для единообразия (опционально)
         if self.wheel:
             self.wheel.angle = 0
-
-        # Восстанавливаем кнопку шарика
         if self.spin_button:
             self.spin_button.opacity = 1
             self.spin_button.disabled = False
-
-        # Вызываем родительский метод
         super().on_leave()
 
     def stop_all_sounds(self):
-        """Останавливает все звуки"""
         if self.wheel_spin_sound:
             self.wheel_spin_sound.stop()
             self.wheel_spin_sound.loop = False
-
-        # Добавьте эту секцию!
         if self.ball_roll_sound:
             self.ball_roll_sound.stop()
             self.ball_roll_sound.loop = False
-
-    def stop_wheel_sound(self):
-        """Останавливает только звук вращения колеса"""
-        if self.wheel_spin_sound:
-            self.wheel_spin_sound.stop()
-            self.wheel_spin_sound.loop = False
+            #
