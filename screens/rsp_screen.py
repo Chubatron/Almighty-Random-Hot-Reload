@@ -186,13 +186,19 @@ class SpinButton(ButtonBehavior, Image):
         if self.is_active:
             if os.path.exists(self.green_button_path):
                 self.source = self.green_button_path
+                self.color = (1, 1, 1, 1)
             else:
+                print(f"⚠️ Файл {self.green_button_path} не найден!")
                 self.source = ''
+                self.color = (0, 1, 0, 1)
         else:
             if os.path.exists(self.red_button_path):
                 self.source = self.red_button_path
+                self.color = (1, 1, 1, 1)
             else:
+                print(f"⚠️ Файл {self.red_button_path} не найден!")
                 self.source = ''
+                self.color = (1, 0, 0, 1)
 
 
 class RSPScreen(BaseGameScreen):
@@ -333,6 +339,8 @@ class RSPScreen(BaseGameScreen):
         if self.spinner_image_5:
             self.spinner_image_5.angle = 0
 
+        print("🔄 Spinner reset to start position")
+
     def go_to_menu(self):
         """Возврат в меню"""
         self.stop_all_sounds()
@@ -347,7 +355,6 @@ class RSPScreen(BaseGameScreen):
         if self.spinner_image_3:
             self.spinner_image_3.opacity = 0
             self.spinner_image_3.angle = 0
-
         if self.spinner_image_5:
             self.spinner_image_5.opacity = 0
             self.spinner_image_5.angle = 0
@@ -356,12 +363,15 @@ class RSPScreen(BaseGameScreen):
             if self.spinner_image_3:
                 self.spinner_image_3.opacity = 1
                 self.current_spinner = self.spinner_image_3
+            print("Classic mode: showing spinner_3")
         else:
             if self.spinner_image_5:
                 self.spinner_image_5.opacity = 1
                 self.current_spinner = self.spinner_image_5
+            print("Extended mode: showing spinner_5")
 
         self.recreate_spin_button()
+        print(f"Applied game type: {self.game_type}")
 
     def update_layout(self, *args):
         """Обновляет параметры layout"""
@@ -374,7 +384,7 @@ class RSPScreen(BaseGameScreen):
         spinner_size_3 = min_dimension * 1.1
         spinner_size_5 = min_dimension * 1.0
 
-        # Вычисляем смещение тени: 5% от высоты экрана (расстояние между центрами вращения)
+        # Вычисляем смещение тени: 5% от высоты экрана
         shadow_offset_y = self.layout.height * 0.05
 
         if self.spinner_image_3:
@@ -389,14 +399,6 @@ class RSPScreen(BaseGameScreen):
 
         if self.spin_button:
             self.spin_button.center = (self.center_x, self.center_y)
-            self.ensure_spin_button_on_top()
-
-    def ensure_spin_button_on_top(self):
-        """Убеждается, что кнопка SPIN находится поверх всех виджетов"""
-        if self.spin_button and self.spin_button.parent == self.layout:
-            if self.layout.children[-1] != self.spin_button:
-                self.layout.remove_widget(self.spin_button)
-                self.layout.add_widget(self.spin_button)
 
     def setup_background(self):
         """Настраивает фон"""
@@ -440,11 +442,26 @@ class RSPScreen(BaseGameScreen):
         self.update_layout()
         self.apply_current_game_type()
 
-        Clock.schedule_once(lambda dt: self.ensure_spin_button_on_top(), 1.0)
-
     def create_spin_button(self):
         """Создаёт кнопку SPIN с размером в зависимости от режима"""
-        button_size = (610, 610) if self.game_type == 'classic' else (580, 580)
+        # Получаем ширину экрана
+        screen_width = self.layout.width if self.layout else 400
+
+        # Получаем размер виджета спиннера
+        if self.game_type == 'classic' and self.spinner_image_3:
+            spinner_size = self.spinner_image_3.width
+        elif self.spinner_image_5:
+            spinner_size = self.spinner_image_5.width
+        else:
+            spinner_size = 0
+        print(f"Widget spiner size: {spinner_size}")
+
+        # Размер кнопки = размер спиннера * коэффициент 1.15
+        koef = 1.15
+        button_size = (spinner_size * koef, spinner_size * koef)
+
+        print(
+            f"Создание кнопки SPIN: screen_width={screen_width}, spinner_size={spinner_size}, button_size={button_size}")
 
         self.spin_button = SpinButton(
             is_active=1,
@@ -452,7 +469,6 @@ class RSPScreen(BaseGameScreen):
         )
         self.spin_button.bind(on_press=self.start_spin)
         self.layout.add_widget(self.spin_button)
-        self.ensure_spin_button_on_top()
 
     def recreate_spin_button(self):
         """Пересоздаёт кнопку SPIN с новым размером"""
@@ -472,24 +488,26 @@ class RSPScreen(BaseGameScreen):
             self.spinner_image_3 = RotatingImageWithShadow(
                 name="spinner_3",
                 source='assets/images/rsp/spinner_3.png',
-                shadow_source='assets/images/rsp/spinner_3.png',  # Тот же файл для тени
+                shadow_source='assets/images/rsp/spinner_3.png',
                 size_hint=(None, None),
                 opacity=0,
                 angle=0
             )
             self.layout.add_widget(self.spinner_image_3)
+            print("Created spinner_3 image with shadow")
 
         # Для расширенного режима (5 лучей)
         if os.path.exists('assets/images/rsp/spinner_5.png'):
             self.spinner_image_5 = RotatingImageWithShadow(
                 name="spinner_5",
                 source='assets/images/rsp/spinner_5.png',
-                shadow_source='assets/images/rsp/spinner_5.png',  # Тот же файл для тени
+                shadow_source='assets/images/rsp/spinner_5.png',
                 size_hint=(None, None),
                 opacity=0,
                 angle=0
             )
             self.layout.add_widget(self.spinner_image_5)
+            print("Created spinner_5 image with shadow")
 
     def load_result_sounds(self):
         """Загружает звуки результатов"""
@@ -509,6 +527,11 @@ class RSPScreen(BaseGameScreen):
                 if sound:
                     sound.volume = 0.8
                     self.result_sounds[key] = sound
+                    print(f"✅ Loaded sound: {path}")
+                else:
+                    print(f"⚠️ Failed to load sound: {path}")
+            else:
+                print(f"⚠️ Sound file not found: {path}")
 
     def play_result_sound(self, result):
         """Воспроизводит звук результата"""
@@ -518,11 +541,14 @@ class RSPScreen(BaseGameScreen):
                 self.spin_sound.stop()
                 self.spin_sound = None
             sound.play()
+            print(f"🔊 Playing result sound: {result}")
 
     def start_spin(self, instance):
         """Запускает вращение"""
         if self.is_spinning or not self.current_spinner:
             return
+
+        print("🎡 Spin button pressed - starting rotation")
 
         self.set_switch_button_state(False)
         self.play_spin_sound()
@@ -549,6 +575,8 @@ class RSPScreen(BaseGameScreen):
         if current_angle < target_base_angle:
             target_angle -= 360
 
+        print(f"Начальный угол: {current_angle}°, финальный: {target_angle}°")
+
         anim = Animation(
             angle=target_angle,
             duration=14.0,
@@ -563,6 +591,8 @@ class RSPScreen(BaseGameScreen):
 
     def _on_spin_complete(self, animation, widget):
         """Завершение вращения"""
+        print("🛑 Спиннер остановился")
+
         if not hasattr(self, 'layout') or not self.layout:
             return
 
@@ -589,6 +619,8 @@ class RSPScreen(BaseGameScreen):
 
     def _force_stop_spin(self, dt):
         """Принудительная остановка"""
+        print("⏰ Таймер: принудительная остановка спиннера")
+
         if not hasattr(self, 'layout') or not self.layout:
             return
 
@@ -631,6 +663,7 @@ class RSPScreen(BaseGameScreen):
         else:
             result = self.extended_angles.get(current_angle, 'spock')
 
+        print(f"Результат по углу: {result}")
         self.show_result(result)
         self.play_result_sound(result)
 
@@ -644,11 +677,15 @@ class RSPScreen(BaseGameScreen):
             'spock': '🖖 СПОК'
         }
         self.result_text = f"ВЫПАЛО: {result_names.get(result, '')}"
+        print(f"Result: {self.result_text}")
 
     def toggle_game_type(self, instance=None):
         """Переключение типа игры"""
         if self.is_spinning:
+            print("Нельзя переключить режим во время вращения!")
             return
+
+        print(f"\n=== SWITCHING GAME TYPE FROM {self.game_type} ===")
 
         Animation.cancel_all(self)
         if self.spin_timer:
@@ -665,7 +702,7 @@ class RSPScreen(BaseGameScreen):
                 self.title_label.text = 'CLASSIC RSP'
 
         self.apply_current_game_type()
-        Clock.schedule_once(lambda dt: self.ensure_spin_button_on_top(), 0.1)
+        print(f"Game type switched to: {self.game_type}")
 
     def clear_ui(self):
         """Очищает интерфейс"""
@@ -691,9 +728,14 @@ class RSPScreen(BaseGameScreen):
         from kivy.core.audio import SoundLoader
 
         sound_path = 'assets/sounds/rsp/spinner_14.ogg'
-#
+
         if os.path.exists(sound_path):
             self.spin_sound = SoundLoader.load(sound_path)
             if self.spin_sound:
                 self.spin_sound.volume = 0.7
                 self.spin_sound.play()
+                print(f"🎵 Playing spin sound: {sound_path}")
+            else:
+                print(f"⚠️ Failed to load spin sound : {sound_path}")
+        else:
+            print(f"⚠️ Spin sound file not found: {sound_path}")
