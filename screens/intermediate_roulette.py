@@ -52,14 +52,12 @@ class IntermediateRoulette(IntermediateScreen):
         # Создаем кнопки выбора рулетки
         self.create_buttons()
 
-        # НЕ создаём отдельную кнопку назад - она создаётся в родительском классе
-        # НЕ загружаем звук - он уже загружен в родительском классе
-
     def create_buttons(self):
         """Создает кнопки выбора типа рулетки"""
         sports = [
             ('Classic Roulette', 'assets/images/buttons/Blue_roulette_button.png', 'roulette', self.change_to_game),
-            ('Russian Roulette', 'assets/images/buttons/Red_rus_roulette_button.png', 'rus_roulette', self.change_to_game),
+            ('Russian Roulette', 'assets/images/buttons/Red_rus_roulette_button.png', 'rus_roulette',
+             self.change_to_game),
         ]
 
         button_width, button_height = 0.3, 0.2
@@ -76,15 +74,33 @@ class IntermediateRoulette(IntermediateScreen):
                 sport=screen_name,
                 size_hint=(button_width, button_height),
                 pos_hint={'x': start_x, 'y': y_pos},
-                callback=callback
+                callback=callback,
+                sound_manager=self.sound_manager  # Передаём sound_manager для проверки mute
             )
             self.layout.add_widget(btn)
 
     def change_to_game(self, instance):
         """Переход к игровому экрану"""
         print(f"🎲 Переход на {instance.sport}")
-        if hasattr(self.manager.get_screen(instance.sport), 'start_game'):
-            self.manager.get_screen(instance.sport).start_game()
-        self.manager.current = instance.sport
 
-    # Метод go_to_menu удалён - используется родительский
+        from main import switch_screen
+
+        # Проверка if hasattr используется в родительском классе для start_game
+        # ВАЖНО: экран будет создан заново, поэтому start_game нужно вызывать после создания
+        # Но так как экран создается в switch_screen, вызываем start_game после перехода
+
+        # Переход к экрану через switch_screen (экран создастся заново)
+        switch_screen(instance.sport)
+
+        # Небольшая задержка, чтобы экран успел создаться, и вызываем start_game
+        Clock.schedule_once(lambda dt: self._call_start_game(instance.sport), 0.1)
+
+    def _call_start_game(self, screen_name):
+        """Вызывает start_game у экрана после его создания"""
+        try:
+            screen = self.manager.get_screen(screen_name)
+            if hasattr(screen, 'start_game'):
+                screen.start_game()
+                print(f"✅ Вызван start_game для {screen_name}")
+        except Exception as e:
+            print(f"⚠️ Ошибка вызова start_game: {e}")

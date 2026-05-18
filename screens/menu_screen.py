@@ -2,6 +2,7 @@ from kivy.uix.screenmanager import Screen
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import Image
 from kivy.uix.label import Label
+from kivy.clock import Clock
 from components.control_panel import ControlPanel
 from components.icon_button import IconButton
 from sound_manager import SoundManager
@@ -21,6 +22,8 @@ class MainMenuScreen(Screen):
         # Извлекаем screen_params из kwargs
         self.screen_params = kwargs.pop('screen_params', None)
         super().__init__(**kwargs)
+
+        self.sound_manager = SoundManager()
 
         layout = FloatLayout()
 
@@ -65,11 +68,58 @@ class MainMenuScreen(Screen):
 
     def on_pre_enter(self, *args):
         """Вызывается перед показом экрана"""
-        SoundManager().play()
+        # Проверяем, не выключен ли звук
+        if not self.sound_manager.is_muted():
+            self.sound_manager.play()
+        else:
+            print(f"🔇 [MainMenuScreen] Звук выключен, не запускаем")
+
+    def test_vibration(self):
+        """Тестовая вибрация - для вашей версии Android"""
+        print("🔨 [MainMenuScreen] Тестовая вибрация")
+
+        from kivy.utils import platform
+        if platform != 'android':
+            print("📱 Не Android")
+            return
+
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            activity = PythonActivity.mActivity
+
+            # Получаем vibrator сервис
+            vibrator = activity.getSystemService('vibrator')
+
+            if vibrator:
+                print("✅ Vibrator получен")
+
+                # Используем VibrationEffect (Android 8+)
+                try:
+                    VibrationEffect = autoclass('android.os.VibrationEffect')
+                    # createOneShot(длительность_мс, амплитуда)
+                    effect = VibrationEffect.createOneShot(200, 255)
+                    vibrator.vibrate(effect)
+                    print("✅ Вибрация 200ms через VibrationEffect")
+                    return
+                except Exception as e:
+                    print(f"⚠️ VibrationEffect не сработал: {e}")
+
+                # Если не сработало, пробуем старый метод
+                try:
+                    vibrator.vibrate(200)
+                    print("✅ Вибрация 200ms через vibrate()")
+                    return
+                except Exception as e:
+                    print(f"⚠️ vibrate() не сработал: {e}")
+            else:
+                print("❌ Vibrator не найден")
+
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
 
     def on_leave(self, *args):
         """Вызывается при уходе с экрана"""
-        pass
 
     def create_buttons(self, layout):
         """Создает кнопки видов спорта"""
@@ -101,17 +151,37 @@ class MainMenuScreen(Screen):
                 sport=screen_name,
                 size_hint=(button_width, button_height),
                 pos_hint={'x': x_pos, 'y': y_pos},
-                callback=callback
+                callback=callback,
+                sound_manager=self.sound_manager
             )
             layout.add_widget(btn)
 
     def change_to_game(self, instance):
-        """Переход к игровому экрану"""
-        if hasattr(self.manager.get_screen(instance.sport), 'start_game'):
-            self.manager.get_screen(instance.sport).start_game()
-        self.manager.current = instance.sport
+        """Переход к игровому экрану с пересозданием"""
+        print(f"🎮 Переход на {instance.sport}")
+
+        from main import switch_screen
+
+        # Переключаем экран (он создастся заново)
+        switch_screen(instance.sport)
+
+        # Вызываем start_game после создания экрана
+        def call_start_game(dt):
+            try:
+                screen = self.manager.get_screen(instance.sport)
+                if hasattr(screen, 'start_game'):
+                    screen.start_game()
+                    print(f"✅ Вызван start_game для {instance.sport}")
+            except Exception as e:
+                print(f"⚠️ Ошибка вызова start_game для {instance.sport}: {e}")
+
+        Clock.schedule_once(call_start_game, 0.2)
 
     def change_to_intermediate_roulette(self, instance):
-        """Переход к промежуточному экрану рулетки"""
-        print("🎲 Переход на промежуточный экран рулетки")
-        self.manager.current = 'intermediate_roulette'
+        """Переход к промежуточному экрану рулетки с пересозданием"""
+        print(f"🎲 Переход на промежуточный экран рулетки")
+
+        from main import switch_screen
+
+        # Переключаем экран (он создастся заново)
+        switch_screen('intermediate_roulette')

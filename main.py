@@ -1,5 +1,6 @@
 ﻿import os
 import sys
+import json
 import requests
 import threading
 from kivy.app import App
@@ -20,10 +21,11 @@ if platform == 'android':
         request_permissions([
             Permission.INTERNET,
             Permission.WRITE_EXTERNAL_STORAGE,
-            Permission.READ_EXTERNAL_STORAGE
+            Permission.READ_EXTERNAL_STORAGE,
+            Permission.VIBRATE  # ← ДОБАВЛЕНО РАЗРЕШЕНИЕ ДЛЯ ВИБРАЦИИ
         ])
     except ImportError:
-        pass
+        print("⚠️ Не удалось импортировать android.permissions")
 # ------------------------------------
 
 # --- ПРАВИЛЬНАЯ РАБОЧАЯ ДИРЕКТОРИЯ ДЛЯ ANDROID ---
@@ -90,6 +92,81 @@ except ImportError as e:
     IntermediateRoulette = None
     IntermediateRandom = None
     RSPScreen = None
+
+
+def get_settings_path():
+    """Возвращает правильный путь для settings.json в зависимости от платформы"""
+    if platform == 'android':
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            context = PythonActivity.mActivity
+            files_dir = context.getFilesDir().getAbsolutePath()
+            settings_path = os.path.join(files_dir, 'settings.json')
+            print(f"🔍 [get_settings_path] Android путь: {settings_path}")
+            return settings_path
+        except Exception as e:
+            print(f"⚠️ Ошибка получения пути на Android: {e}")
+            return 'settings.json'
+    else:
+        return 'settings.json'
+
+
+def load_mute_state():
+    """Загружает состояние звука из файла"""
+    settings_path = get_settings_path()
+
+    # Проверяем также в текущей директории для отладки
+    if os.path.exists('settings.json'):
+        pass
+
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                is_muted = settings.get('is_muted', False)
+                print(f"📁 Загружено состояние звука при запуске: muted={is_muted}")
+                return is_muted
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки настроек: {e}")
+            return False
+    else:
+        print(f"⚠️ Файл настроек не найден по пути: {settings_path}")
+        # Пытаемся создать файл
+        try:
+            default_settings = {"is_muted": False}
+            os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+            with open(settings_path, 'w', encoding='utf-8') as f:
+                json.dump(default_settings, f, indent=4)
+            print(f"✅ Создан файл настроек: {settings_path}")
+        except Exception as e:
+            print(f"❌ Ошибка создания файла: {e}")
+        return False
+
+
+def save_mute_state(is_muted):
+    """Сохраняет состояние звука в файл (используется другими модулями)"""
+    settings_path = get_settings_path()
+    settings = {}
+
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+        except:
+            pass
+
+    settings['is_muted'] = is_muted
+
+    try:
+        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, ensure_ascii=False, indent=4)
+        print(f"💾 Сохранено состояние звука: muted={is_muted} в {settings_path}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Ошибка сохранения: {e}")
+        return False
 
 
 class ScreenParams:
@@ -296,6 +373,8 @@ class UpdateManager:
 
 class SportsGameApp(App):
     def build(self):
+        print("🚀 [App] Запуск приложения")
+
         # Настройка окна
         if platform == 'android':
             Window.fullscreen = 'auto'
@@ -308,65 +387,124 @@ class SportsGameApp(App):
         self.screen_params = ScreenParams()
 
         # Инициализация менеджеров
+        print("🔧 [App] Инициализация менеджеров")
         self.lang = LanguageManager()
         self.sound_mgr = SoundManager()
         self.update_mgr = UpdateManager(self)
+
+        # Загружаем сохраненное состояние звука
+        if load_mute_state():
+            self.sound_mgr.mute()
+            print(f"🔇 [App] Применено сохраненное состояние: звук ВЫКЛЮЧЕН")
+        else:
+            print(f"🔊 [App] Применено сохраненное состояние: звук ВКЛЮЧЕН")
 
         # Звук (используем правильные пути)
         try:
             sound_path = "assets/sounds/background.wav"
             if os.path.exists(sound_path):
                 self.sound_mgr.initialize(sound_path)
-                print(f"[DEBUG] Sound loaded from: {sound_path}")
+                print(f"✅ [App] Звук загружен из: {sound_path}")
             else:
-                print(f"[ERROR] Sound file not found: {sound_path}")
+                print(f"❌ [App] Файл звука не найден: {sound_path}")
         except Exception as e:
-            print(f"Ошибка инициализации звука: {e}")
+            print(f"❌ [App] Ошибка инициализации звука: {e}")
 
-        # Экраны (передаём параметры экрана в каждый)
-        self.sm = ScreenManager(transition=FadeTransition(duration=0.3))
+        # ========== НОВЫЙ КОД: ХРАНИМ КЛАССЫ ЭКРАНОВ ==========
+        self.screen_classes = {
+            'menu': MainMenuScreen,
+            'magic_ball': MagicBallScreen,
+            'coin': CoinScreen,
+            'dice': DiceScreen,
+            'roulette': RouletteScreen,
+            'rus_roulette': RusRouletteScreen,
+            'random': RandomScreen,
+            'quiz': QuizScreen,
+            'random_number': RandomNumberScreen,
+            'rsp': RSPScreen,
+            'intermediate_roulette': IntermediateRoulette,
+            'intermediate_random': IntermediateRandom
+        }
 
-        screens_to_add = [
-            ('menu', MainMenuScreen),
-            ('magic_ball', MagicBallScreen),
-            ('coin', CoinScreen),
-            ('dice', DiceScreen),
-            ('roulette', RouletteScreen),
-            ('rus_roulette', RusRouletteScreen),
-            ('random', RandomScreen),
-            ('quiz', QuizScreen),
-            ('random_number', RandomNumberScreen),
-            ('rsp', RSPScreen),
-            ('intermediate_roulette', IntermediateRoulette),
-            ('intermediate_random', IntermediateRandom)
-        ]
+        # Создаем ScreenManager с анимацией
+        self.sm = ScreenManager(transition=FadeTransition(duration=0.4))
 
-        for name, screen_class in screens_to_add:
-            if screen_class is not None:
-                try:
-                    # Передаём screen_params в каждый экран
-                    self.sm.add_widget(screen_class(name=name, screen_params=self.screen_params))
-                    print(f"[DEBUG] Screen added: {name}")
-                except Exception as e:
-                    print(f"Ошибка добавления экрана {name}: {e}")
+        # Создаем ТОЛЬКО меню при старте (остальные будем создавать при переходе)
+        if MainMenuScreen is not None:
+            menu = MainMenuScreen(name='menu', screen_params=self.screen_params)
+            self.sm.add_widget(menu)
+            print("✅ [App] Создано меню")
+        else:
+            print("❌ [App] Ошибка: MainMenuScreen не загружен")
+
+        # =====================================================
 
         # Запуск музыки
-        Clock.schedule_once(lambda dt: self.sound_mgr.play(), 0.5)
+        def start_music(dt):
+            if not self.sound_mgr.is_muted():
+                self.sound_mgr.play()
+            else:
+                print("🔇 [App] Фоновая музыка не запущена - звук выключен")
+
+        Clock.schedule_once(start_music, 0.5)
 
         # Проверка обновлений через 5 секунд после запуска
         Clock.schedule_once(lambda dt: self.update_mgr.check_for_updates(False), 5)
 
+        print("✅ [App] Приложение запущено")
         return self.sm
 
+    def switch_to_screen(self, screen_name, **kwargs):
+        """
+        Переключает на экран, удаляя старый и создавая новый.
+        Это гарантирует, что FadeTransition будет работать при КАЖДОМ входе.
+        """
+        print(f"🔄 [App] Переключение на {screen_name}")
+
+        # Проверяем, есть ли уже такой экран
+        if self.sm.has_screen(screen_name):
+            old_screen = self.sm.get_screen(screen_name)
+            self.sm.remove_widget(old_screen)
+            print(f"   Удален старый экран {screen_name}")
+
+        # Создаем новый экран
+        screen_class = self.screen_classes.get(screen_name)
+        if screen_class is None:
+            print(f"❌ Ошибка: экран {screen_name} не найден в screen_classes")
+            return
+
+        try:
+            new_screen = screen_class(name=screen_name, screen_params=self.screen_params, **kwargs)
+            self.sm.add_widget(new_screen)
+            print(f"   Создан новый экран {screen_name}")
+        except Exception as e:
+            print(f"❌ Ошибка создания экрана {screen_name}: {e}")
+            return
+
+        # Переключаемся
+        self.sm.current = screen_name
+        print(f"✅ Переключено на {screen_name}")
+
+    def go_to_menu(self):
+        """Возврат в меню с пересозданием"""
+        self.switch_to_screen('menu')
+
     def on_pause(self):
+        print("📱 [App] on_pause - приложение свернуто")
         if hasattr(self, 'sound_mgr'):
+            print("🔊 [App] Пауза звука при сворачивании")
             self.sound_mgr.pause()
         return True
 
     def on_resume(self):
+        print("📱 [App] on_resume - приложение восстановлено")
         if hasattr(self, 'sound_mgr'):
-            self.sound_mgr.play()
-        # Проверка обновлений при возврате в приложение
+            # Проверяем, не выключен ли звук
+            if not self.sound_mgr.is_muted():
+                print("🔊 [App] Возобновление звука при восстановлении")
+                self.sound_mgr.play()
+            else:
+                print("🔇 [App] Звук выключен, не восстанавливаем при восстановлении")
         if hasattr(self, 'update_mgr'):
             Clock.schedule_once(lambda dt: self.update_mgr.check_for_updates(False), 2)
 
@@ -374,5 +512,18 @@ class SportsGameApp(App):
         return self.lang._(key)
 
 
+# Глобальная функция для удобного переключения экранов из любого места
+def switch_screen(screen_name, **kwargs):
+    """Глобальная функция для переключения экранов"""
+    app = App.get_running_app()
+    if hasattr(app, 'switch_to_screen'):
+        app.switch_to_screen(screen_name, **kwargs)
+    else:
+        # Fallback на старый метод
+        app.sm.current = screen_name
+
+
 if __name__ == '__main__':
+    print("🎮 Запуск SportsGameApp...")
     SportsGameApp().run()
+    print("👋 Приложение завершено")

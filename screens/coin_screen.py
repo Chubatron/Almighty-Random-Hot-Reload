@@ -9,6 +9,8 @@ from kivy.core.image import Image as CoreImage
 from kivy.core.audio import SoundLoader
 from kivy.graphics import Color, Ellipse, Rectangle, Line, PushMatrix, PopMatrix, Rotate, Translate, \
     Scale
+from kivy.uix.behaviors import ButtonBehavior
+from kivy.uix.image import Image as KivyImage
 import random
 import os
 import math
@@ -571,6 +573,11 @@ class FinalSpritesheetCoin(Image):
 class CoinScreen(BaseGameScreen):
     """Игровой экран с монетой из спрайт-листов 12x9 (108 кадров)"""
 
+    # КОЭФФИЦИЕНТЫ ДЛЯ КНОПКИ BACK_TO_MENU (через pos_hint)
+    BACK_BUTTON_SIZE_COEFF = 0.12  # Размер кнопки = 12% от ширины экрана
+    BACK_BUTTON_POS_X_COEFF = 0.05  # Позиция X: 0 = левый  край, 0.9 = правый край
+    BACK_BUTTON_POS_Y_COEFF = 0.91  # Позиция Y: 0 = нижний край, 0.9 = верхний край
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -594,6 +601,8 @@ class CoinScreen(BaseGameScreen):
         self.particle_system = None
         self.return_animation_active = False
         self.is_animating = False
+        self.vibration_event = None
+        self.vibration_event_pause = None
 
         self.current_side = 0
         self.total_flips = 0
@@ -685,8 +694,17 @@ class CoinScreen(BaseGameScreen):
         """Рассчитывает смещение для финального этапа"""
         return -coin_height * 0.33
 
+    def create_back_button(self):
+        """Переопределяем родительский метод - создаем свою кнопку вместо стандартной"""
+        if self.back_button and self.back_button in self.layout.children:
+            self.layout.remove_widget(self.back_button)
+            self.back_button = None
+        self.create_custom_back_button()
+
     def on_enter(self):
         """При входе на экран"""
+        print(f"🎬 [CoinScreen] Вход на экран, is_muted={self.sound_manager.is_muted()}")
+
         if not self.adaptive_background:
             self.adaptive_background = AdaptiveBackground(
                 source='assets/backgrounds/coin_bg.png'
@@ -749,6 +767,7 @@ class CoinScreen(BaseGameScreen):
             self.particle_system.set_glow_mode(False)
 
     def on_leave(self):
+        print(f"🎬 [CoinScreen] Выход с экрана, is_muted={self.sound_manager.is_muted()}")
         super().on_leave()
         self.cleanup_all()
         Window.unbind(on_resize=self.on_window_resize)
@@ -794,6 +813,8 @@ class CoinScreen(BaseGameScreen):
 
         self.is_animating = False
         self.return_animation_active = False
+        self.stop_vibration()
+        self.stop_pause_vibration()
 
     def on_window_resize(self, instance, width, height):
         """При изменении размера окна пересчитываем параметры"""
@@ -826,6 +847,10 @@ class CoinScreen(BaseGameScreen):
 
                 Clock.schedule_once(lambda dt: self.coin._update_rotation(), 0.1)
 
+        if self.back_button:
+            btn_size = width * self.BACK_BUTTON_SIZE_COEFF
+            self.back_button.size = (btn_size, btn_size)
+
     def check_file(self, path):
         return os.path.exists(path)
 
@@ -847,11 +872,14 @@ class CoinScreen(BaseGameScreen):
             print("⚠️ Файл crystal.ogg не найден")
 
     def play_flip_sound(self):
+        if self.sound_manager.is_muted():
+            return
         if self.flip_sound:
             try:
                 if self.flip_sound.state == 'play':
                     self.flip_sound.stop()
                 self.flip_sound.play()
+                print("🔊 [CoinScreen] Воспроизведение звука flip")
             except:
                 pass
 
@@ -860,12 +888,14 @@ class CoinScreen(BaseGameScreen):
             self.flip_sound.stop()
 
     def play_crystal_sound(self):
+        if self.sound_manager.is_muted():
+            return
         if self.crystal_sound:
             try:
                 if self.crystal_sound.state == 'play':
                     self.crystal_sound.stop()
                 self.crystal_sound.play()
-                print("🔊 Воспроизводится crystal.ogg")
+                print("🔊 [CoinScreen] Воспроизведение crystal.ogg")
             except Exception as e:
                 print(f"⚠️ Ошибка воспроизведения crystal.ogg: {e}")
 
@@ -1043,7 +1073,10 @@ class CoinScreen(BaseGameScreen):
             self.final_coin.stop_animation()
             self.final_coin.opacity = 0
 
-        self.play_flip_sound()
+        # ЭТАП 1: средняя вибрация при запуске
+        self.vibrate_long()
+
+        Clock.schedule_once(lambda dt: self.play_flip_sound(), 0.3)
 
         if self.particle_system:
             self.particle_system.set_glow_mode(True)
@@ -1121,6 +1154,15 @@ class CoinScreen(BaseGameScreen):
 
         self.coin.is_animating = True
 
+        # ЭТАП 3: вибрация на протяжении всего вращения
+        vibration_interval = 0.1
+        vibration_duration_ms = 50
+        self.vibration_event = Clock.schedule_interval(
+            lambda dt: self.vibrate_custom(vibration_duration_ms),
+            vibration_interval
+        )
+        Clock.schedule_once(lambda dt: self.stop_vibration(), total_duration)
+
         def update_frame(dt):
             if not self.coin.is_animating or self.coin is None:
                 return False
@@ -1147,62 +1189,69 @@ class CoinScreen(BaseGameScreen):
         Clock.schedule_once(lambda dt: self.finish_rotation(result)
         if self.coin is not None and self.coin.is_animating else None, total_duration + 0.1)
 
+    def stop_vibration(self):
+        if hasattr(self, 'vibration_event') and self.vibration_event:
+            self.vibration_event.cancel()
+            self.vibration_event = None
+
     def finish_rotation(self, result):
         if self.coin is None:
             return
         if self.coin:
             self.coin.stop_animation()
-            # НЕ ВОССТАНАВЛИВАЕМ ВИДИМОСТЬ МОНЕТЫ! Она будет скрыта в start_final_animation
-            # self.coin.opacity = 1  <- УБИРАЕМ ЭТУ СТРОКУ
+
+        # ЭТАП 4: вибрация на протяжении паузы (0.5 секунды)
+        pause_duration = 0.5
+        self.vibration_event_pause = Clock.schedule_interval(
+            lambda dt: self.vibrate_short(),
+            0.1
+        )
+        Clock.schedule_once(lambda dt: self.stop_pause_vibration(), pause_duration)
+
         Clock.schedule_once(lambda dt: self.start_final_animation(result)
-        if self.coin is not None and not self.return_animation_active else None, 0.5)
+        if self.coin is not None and not self.return_animation_active else None, pause_duration)
+
+    def stop_pause_vibration(self):
+        if hasattr(self, 'vibration_event_pause') and self.vibration_event_pause:
+            self.vibration_event_pause.cancel()
+            self.vibration_event_pause = None
 
     def start_final_animation(self, result):
-        """Запускает финальную анимацию - монета увеличивается, тень смещается по оси X"""
+        """Запускает финальную анимацию - монета увеличивается, тень смещается"""
         if self.final_coin is None:
             return
 
-        # СРАЗУ СКРЫВАЕМ ОСНОВНУЮ МОНЕТУ
+        # Скрываем основную монету
         if self.coin:
             self.coin.opacity = 0
 
-        # Запускаем звук
-        self.play_crystal_sound()
-
-        # Выбираем нужный спрайт-лист
+        # Выбираем спрайт-лист
         if result == 0:
             final_spritesheet = self.final_spritesheet_orel
         else:
             final_spritesheet = self.final_spritesheet_reshka
 
-        # Загружаем спрайт-лист
         self.final_coin.load_spritesheet(final_spritesheet)
 
-        # Сбрасываем параметры финальной монеты
         self.final_coin.opacity = 1
         self.final_coin.size = (self.coin_height, self.coin_height)
         self.final_coin.pos_hint = {'center_x': self.center_pos_x, 'center_y': self.center_pos_y}
 
-        # Устанавливаем параметры тени (смещение по оси X)
         self.final_coin.shadow_offset_x = 0
         self.final_coin.shadow_offset_y = self.initial_shadow_offset
         self.final_coin.shadow_scale_y = 1.0
         self.final_coin.shadow_alpha = 0.5
         self.final_coin.coin_opacity = 1.0
 
-        # Принудительно обновляем позицию
         self.final_coin.pos = self.final_coin.pos
         self.final_coin.size = self.final_coin.size
 
-        # Длительность анимации
         animation_duration = 1.5
         target_size = self.final_coin_size
 
-        # Запускаем анимацию кадров
         frame_fps = 36 / animation_duration
         self.final_coin.start_animation(fps=frame_fps, loop=False)
 
-        # Анимация монеты (без изменений)
         grow_anim = Animation(
             size=(target_size, target_size),
             pos_hint={'center_x': 0.5, 'center_y': 0.5},
@@ -1210,15 +1259,16 @@ class CoinScreen(BaseGameScreen):
             t='linear'
         )
 
-        # АНИМАЦИЯ ТЕНИ: смещается по оси X (влево)
         shadow_move_anim = Animation(
-            shadow_offset_y=-self.coin_height * 15,  # Смещаем тень влево по оси Y
-            shadow_alpha=0.5,  # Тень становится прозрачнее
+            shadow_offset_y=-self.coin_height * 15,
+            shadow_alpha=0.5,
             duration=animation_duration,
             t='linear'
         )
 
         def on_grow_complete(animation, coin):
+            self.play_crystal_sound()
+            self.vibrate_custom(200)  # вибрация одновременно со звуком
             if self.particle_system:
                 self.particle_system.set_glow_mode(False)
             self.set_animating_state(False)
@@ -1233,7 +1283,7 @@ class CoinScreen(BaseGameScreen):
         self.current_side = result
 
     def return_coin_to_start(self):
-        """Возвращает монету в исходное положение с анимацией тени"""
+        """Возвращает монету в исходное положение"""
         self.set_animating_state(True)
         if self.fullscreen_touch_area:
             self.fullscreen_touch_area.is_enabled = False
@@ -1254,17 +1304,14 @@ class CoinScreen(BaseGameScreen):
             if self.coin.frames and len(self.coin.frames) > 0:
                 self.coin.texture = self.coin.frames[0]
 
-            # Сначала устанавливаем тень ДАЛЕКО ЗА ПРЕДЕЛЫ ЭКРАНА (сверху)
             self.coin.shadow_offset_x = 0
             self.coin.shadow_offset_y = -Window.height
             self.coin.shadow_scale_y = 1.0
             self.coin.shadow_alpha = 0.5
 
-            # Устанавливаем начальную позицию для анимации возврата - ИЗ ЦЕНТРА ЭКРАНА
             self.coin.pos_hint = {'center_x': 0.5, 'center_y': 0.5}
             self.coin.size = (self.final_coin_size, self.final_coin_size)
 
-        # Анимация уменьшения монеты и возврата на стартовую позицию
         return_anim = Animation(
             size=(self.coin_height, self.coin_height),
             pos_hint={'center_x': self.start_pos_x, 'center_y': self.start_pos_y},
@@ -1272,7 +1319,6 @@ class CoinScreen(BaseGameScreen):
             t='out_quad'
         )
 
-        # Анимация тени: плавный возврат в нормальное положение
         shadow_return_anim = Animation(
             shadow_offset_y=self.initial_shadow_offset,
             shadow_offset_x=0,
@@ -1285,11 +1331,42 @@ class CoinScreen(BaseGameScreen):
             self.set_animating_state(False)
 
         return_anim.bind(on_complete=on_return_complete)
-
-        # Запускаем анимации
         return_anim.start(self.coin)
         shadow_return_anim.start(self.coin)
 
+    def create_custom_back_button(self):
+        screen_width = self.get_screen_width()
+        btn_size = screen_width * self.BACK_BUTTON_SIZE_COEFF
+
+        class ImageButton(ButtonBehavior, KivyImage):
+            pass
+
+        back_btn = ImageButton(
+            source='assets/images/buttons/Orange_back_to_menu_button_90.png',
+            size_hint=(None, None),
+            size=(btn_size, btn_size),
+            pos_hint={
+                'x': self.BACK_BUTTON_POS_X_COEFF,
+                'y': self.BACK_BUTTON_POS_Y_COEFF
+            },
+            allow_stretch=True
+        )
+
+        def on_press(instance):
+            Animation(opacity=0.7, duration=0.1).start(instance)
+
+        def on_release(instance):
+            Animation(opacity=1.0, duration=0.1).start(instance)
+            self.play_back_sound()
+            Clock.schedule_once(lambda dt: self.go_to_menu(), 0.1)
+
+        back_btn.bind(on_press=on_press)
+        back_btn.bind(on_release=on_release)
+
+        self.back_button = back_btn
+        self.layout.add_widget(back_btn)
+
     def go_to_menu(self):
         self.cleanup_all()
-        super().go_to_menu()
+        from main import switch_screen
+        switch_screen('menu')

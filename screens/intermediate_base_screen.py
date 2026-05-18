@@ -40,7 +40,6 @@ class IntermediateScreen(Screen):
             self.back_sound = SoundLoader.load(sound_path)
             if self.back_sound:
                 self.back_sound.volume = 0.8
-                print(f"✅ Loaded back button sound: {sound_path}")
         else:
             print(f"⚠️ Back button sound file not found: {sound_path}")
 
@@ -118,9 +117,11 @@ class IntermediateScreen(Screen):
         print(f"[DEBUG] IntermediateScreen button added at pos={back_btn.pos}, size={back_btn.size}")
 
     def go_to_menu(self, instance=None):
-        """Возврат в главное меню"""
-        self.manager.current = 'menu'
+        """Возврат в главное меню - используем switch_screen для пересоздания экранов"""
+        from main import switch_screen
+        switch_screen('menu')
 
     def go_to_game(self, game_name):
-        """Переход к игре - будет убавлять громкость при входе в игру"""
-        self.manager.current = game_name
+        """Переход к игре - используем switch_screen для пересоздания экранов"""
+        from main import switch_screen
+        switch_screen(game_name)

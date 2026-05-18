@@ -14,7 +14,6 @@ class MLTextMixin:
         # Извлекаем text_key из kwargs
         if 'text_key' in kwargs:
             self.text_key = kwargs.pop('text_key')
-            print(f"🏷️ Создан виджет с ключом: {self.text_key}")
 
         super().__init__(**kwargs)
 
@@ -23,7 +22,6 @@ class MLTextMixin:
 
     def on_text_key(self, instance, value):
         """Когда меняется ключ, обновляем текст"""
-        print(f"🔄 Ключ изменен: {value}")
         self.update_text()
 
     def update_text(self, *args):
@@ -51,7 +49,6 @@ class MLTextMixin:
         if value and self.auto_update:
             app = App.get_running_app()
             if app and hasattr(app, 'lang'):
-                print(f"🔗 Виджет '{self.text_key}' подписался на смену языка")
                 # Подписываемся на изменение свойства current_lang
                 app.lang.bind(current_lang=self.update_text)
                 # Также подписываемся на кастомное событие
