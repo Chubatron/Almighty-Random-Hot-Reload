@@ -6,934 +6,21 @@ import random
 import math
 from kivy.app import App
 from kivy.uix.image import Image
-from kivy.uix.widget import Widget
-from kivy.properties import StringProperty, NumericProperty, ObjectProperty, BooleanProperty
+from kivy.properties import StringProperty, NumericProperty
 from kivy.clock import Clock
 from kivy.animation import Animation
-from kivy.graphics import Color, Rectangle, PushMatrix, PopMatrix, Rotate, Translate, Line, Ellipse
-from PIL import Image as PILImage
-from kivy.graphics.texture import Texture
-from screens.base_game_screen import BaseGameScreen
 from kivy.core.window import Window
 from kivy.utils import platform
 from kivy.core.audio import SoundLoader
 
+from screens.base_game_screen import BaseGameScreen
+from screens.dice import (
+    DropZone, PointMarker, DiceWidget, GlassWidget, ShadowWidget
+)
+
 # ===== НАСТРОЙКИ ОТЛАДКИ =====
-DEBUG_MODE = False  # True - показывать зону и точку и зеленые рамки, False - скрыть
+DEBUG_MODE = False
 # =============================
-
-
-class GlowEffect(Widget):
-    """Виджет свечения под кубиком в виде эллипса с градиентной прозрачностью"""
-
-    def __init__(self, size, pos, **kwargs):
-        super().__init__(**kwargs)
-        self.dice_size = size
-
-        self.ellipse_width_factor = 1.6
-        self.ellipse_height_factor = 0.7
-        self.ellipse_offset_x_factor = 0.15
-
-        self.rotation = 90
-        self.update_ellipse_size()
-
-        self.pos = (pos[0] + (size - self.glow_width) / 2 - self.offset_x,
-                    pos[1] + (size - self.glow_height) / 2)
-        self.opacity = 1
-        self._draw_glow()
-
-    def update_ellipse_size(self):
-        self.glow_width = self.dice_size * self.ellipse_width_factor
-        self.glow_height = self.dice_size * self.ellipse_height_factor
-        self.offset_x = self.dice_size * self.ellipse_offset_x_factor
-        self.size = (self.glow_width, self.glow_height)
-
-    def _draw_glow(self):
-        self.canvas.clear()
-        with self.canvas:
-            PushMatrix()
-            Translate(self.pos[0] + self.glow_width / 2, self.pos[1] + self.glow_height / 2)
-            Rotate(angle=self.rotation, origin=(0, 0))
-            Translate(-(self.pos[0] + self.glow_width / 2), -(self.pos[1] + self.glow_height / 2))
-
-            size_factors = [1.0, 0.92, 0.84, 0.76, 0.68, 0.60, 0.52, 0.44, 0.36, 0.28]
-            opacity_factors = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
-
-            for i in range(10):
-                size_factor = size_factors[i]
-                opacity = opacity_factors[i] * self.opacity
-
-                inner_width = self.glow_width * size_factor
-                inner_height = self.glow_height * size_factor
-                inner_pos = (self.pos[0] + (self.glow_width - inner_width) / 2,
-                            self.pos[1] + (self.glow_height - inner_height) / 2)
-
-                Color(0.5, 0.7, 1.0, opacity)
-                Ellipse(pos=inner_pos, size=(inner_width, inner_height))
-
-            PopMatrix()
-
-    def update_position(self, pos, dice_size):
-        self.dice_size = dice_size
-        self.update_ellipse_size()
-        self.pos = (pos[0] + (dice_size - self.glow_width) / 2 - self.offset_x,
-                    pos[1] + (dice_size - self.glow_height) / 2)
-        self._draw_glow()
-
-    def fade_out(self, duration=0.3, callback=None):
-        anim = Animation(opacity=0, duration=duration)
-        anim.bind(on_complete=lambda *args: self._on_fade_complete(callback))
-        anim.start(self)
-
-    def _on_fade_complete(self, callback):
-        if callback:
-            callback()
-
-    def on_opacity(self, instance, value):
-        self._draw_glow()
-
-
-class DropZone(Widget):
-    """Зона для сброса стакана в левой части экрана в виде эллипса"""
-
-    def __init__(self, screen_width, screen_height, **kwargs):
-        super().__init__(**kwargs)
-
-        self.zone_width = screen_width * 0.48
-        self.zone_height = screen_height * 1.05
-        self.zone_x = screen_width * 0.03
-        self.zone_y = screen_height * 0.5 - self.zone_height / 2
-
-        self.size = (self.zone_width, self.zone_height)
-        self.pos = (self.zone_x, self.zone_y)
-
-        if DEBUG_MODE:
-            self.draw_zone()
-
-    def draw_zone(self):
-        """Рисует желтую подсветку зоны сброса"""
-        self.canvas.clear()
-        with self.canvas:
-            Color(1, 0.8, 0, 0.35)
-            Ellipse(pos=self.pos, size=self.size)
-            Color(1, 0.6, 0, 1.0)
-            Line(ellipse=(self.pos[0], self.pos[1], self.size[0], self.size[1]), width=4)
-            Color(1, 1, 0, 0.2)
-            inner_pos = (self.pos[0] + 10, self.pos[1] + 10)
-            inner_size = (self.size[0] - 20, self.size[1] - 20)
-            Ellipse(pos=inner_pos, size=inner_size)
-
-    def update_zone_visibility(self):
-        if DEBUG_MODE:
-            self.draw_zone()
-        else:
-            self.canvas.clear()
-
-    def check_point_in_zone(self, point_x, point_y):
-        ellipse_center_x = self.pos[0] + self.size[0] / 2
-        ellipse_center_y = self.pos[1] + self.size[1] / 2
-
-        nx = (point_x - ellipse_center_x) / (self.size[0] / 2)
-        ny = (point_y - ellipse_center_y) / (self.size[1] / 2)
-
-        return (nx * nx + ny * ny) <= 1
-
-    def check_collision(self, widget_pos, widget_size):
-        widget_center_x = widget_pos[0] + widget_size[0] / 2
-        widget_center_y = widget_pos[1] + widget_size[1] / 2
-        return self.check_point_in_zone(widget_center_x, widget_center_y)
-
-    def clamp_point_to_zone(self, point_x, point_y):
-        ellipse_center_x = self.pos[0] + self.size[0] / 2
-        ellipse_center_y = self.pos[1] + self.size[1] / 2
-
-        dx = point_x - ellipse_center_x
-        dy = point_y - ellipse_center_y
-
-        nx = dx / (self.size[0] / 2)
-        ny = dy / (self.size[1] / 2)
-
-        if (nx * nx + ny * ny) <= 1:
-            return (point_x, point_y)
-
-        length = math.sqrt(nx * nx + ny * ny)
-        nx /= length
-        ny /= length
-
-        clamped_x = ellipse_center_x + nx * (self.size[0] / 2)
-        clamped_y = ellipse_center_y + ny * (self.size[1] / 2)
-
-        return (clamped_x, clamped_y)
-
-
-class PointMarker(Widget):
-    """Виджет для отображения точки на экране"""
-
-    def __init__(self, color=(1, 0, 0, 1), size=15, **kwargs):
-        super().__init__(**kwargs)
-        self.point_x = 0
-        self.point_y = 0
-        self.color = color
-        self.point_size = size
-        self.is_visible = False
-
-    def draw_point(self):
-        self.canvas.clear()
-        if not self.is_visible:
-            return
-        with self.canvas:
-            Color(self.color[0], self.color[1], self.color[2], 0.3)
-            Ellipse(pos=(self.point_x - self.point_size, self.point_y - self.point_size),
-                   size=(self.point_size * 2, self.point_size * 2))
-            Color(self.color[0], self.color[1], self.color[2], self.color[3])
-            Ellipse(pos=(self.point_x - self.point_size/2, self.point_y - self.point_size/2),
-                   size=(self.point_size, self.point_size))
-            Color(1, 1, 1, 0.8)
-            Ellipse(pos=(self.point_x - self.point_size/4, self.point_y - self.point_size/4),
-                   size=(self.point_size/2, self.point_size/2))
-
-    def update_position(self, x, y, visible=True):
-        self.point_x = x
-        self.point_y = y
-        self.is_visible = visible
-        self.draw_point()
-
-
-class DiceWidget(Widget):
-    """Виджет кубика с поддержкой вращения через смену кадров"""
-
-    sprite_sheet_path = StringProperty('')
-    dice_size = NumericProperty(100)
-    rows = NumericProperty(6)
-    cols = NumericProperty(12)
-    frame_index = NumericProperty(0)
-    rotation_angle = NumericProperty(-90)
-    debug_mode = BooleanProperty(False)
-
-    _texture = ObjectProperty(None, allownone=True)
-
-    def __init__(self, **kwargs):
-        self.initial_dice_size = kwargs.pop('dice_size', None)
-        self.on_dice_click = kwargs.pop('on_dice_click', None)
-        self.on_animation_complete = kwargs.pop('on_animation_complete', None)
-        self.is_animating = False
-        self.animation_frames = []
-        self.glow = None
-        self.original_size = None
-        self.enlarged_size = None
-        self.original_position = None
-        self.original_center = None
-        self.rotation_frames = []
-        super().__init__(**kwargs)
-
-        if self.sprite_sheet_path and os.path.exists(self.sprite_sheet_path):
-            self._load_spritesheet(self.sprite_sheet_path)
-        else:
-            if self.initial_dice_size:
-                self.dice_size = self.initial_dice_size
-                self.size = (self.dice_size, self.dice_size)
-
-        self.bind(
-            frame_index=self._update_display,
-            pos=self._update_display,
-            size=self._update_display,
-            dice_size=self._on_dice_size_changed,
-            rotation_angle=self._update_display
-        )
-
-        if DEBUG_MODE:
-            self.bind(pos=self._update_debug_border, size=self._update_debug_border)
-
-        Clock.schedule_once(lambda dt: self._create_glow(), 0)
-
-    def _on_dice_size_changed(self, instance, value):
-        self.size = (value, value)
-        self._update_display()
-
-    def _create_glow(self):
-        if self.parent and self.glow is None:
-            self.glow = GlowEffect(self.dice_size, self.pos)
-            self.parent.add_widget(self.glow, index=0)
-
-    def _remove_glow(self):
-        if self.glow and self.glow.parent:
-            self.glow.parent.remove_widget(self.glow)
-            self.glow = None
-
-    def _update_glow_position(self):
-        if self.glow:
-            self.glow.update_position(self.pos, self.dice_size)
-
-    def _load_spritesheet(self, path):
-        try:
-            img = PILImage.open(path)
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-
-            self._texture = Texture.create(size=img.size, colorfmt='rgba')
-            self._texture.blit_buffer(img.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
-
-            if self.initial_dice_size:
-                self.dice_size = self.initial_dice_size
-            else:
-                if platform == 'android':
-                    real_width = Window.system_size[0]
-                    self.dice_size = real_width * 0.12
-                else:
-                    app = App.get_running_app()
-                    screen_params = getattr(app, 'screen_params', None)
-                    if screen_params:
-                        self.dice_size = screen_params.width * 0.12
-                    else:
-                        self.dice_size = 80
-
-            self.size = (self.dice_size, self.dice_size)
-            self._update_display()
-
-        except Exception as e:
-            print(f"Error loading dice spritesheet: {e}")
-
-    def _update_display(self, *args):
-        if not self._texture or self.width == 0:
-            return
-
-        total_frames = self.rows * self.cols
-        if total_frames == 0:
-            return
-
-        frame_idx = self.frame_index % total_frames
-        row = frame_idx // self.cols
-        col = frame_idx % self.cols
-
-        tex_left = col / self.cols
-        tex_right = (col + 1) / self.cols
-        tex_top = row / self.rows
-        tex_bottom = (row + 1) / self.rows
-
-        tex_coords = (tex_left, tex_bottom,
-                      tex_right, tex_bottom,
-                      tex_right, tex_top,
-                      tex_left, tex_top)
-
-        self.canvas.clear()
-
-        with self.canvas:
-            PushMatrix()
-            Translate(self.x + self.width / 2, self.y + self.height / 2)
-            Rotate(angle=self.rotation_angle, origin=(0, 0))
-            Translate(-(self.x + self.width / 2), -(self.y + self.height / 2))
-            Color(1, 1, 1, 1)
-            Rectangle(pos=self.pos, size=self.size, texture=self._texture, tex_coords=tex_coords)
-            PopMatrix()
-
-        self._update_glow_position()
-
-        if DEBUG_MODE:
-            self.canvas.after.clear()
-            with self.canvas.after:
-                Color(0, 1, 0, 0.8)
-                Line(rectangle=(self.x, self.y, self.width, self.height), width=2)
-
-    def _update_debug_border(self, *args):
-        if not DEBUG_MODE:
-            return
-        self._update_display()
-
-    def set_random_frame(self):
-        total_frames = self.rows * self.cols
-        self.frame_index = random.randint(0, total_frames - 1)
-
-    def set_random_frame_same_row(self):
-        total_frames = self.rows * self.cols
-        current_row = (self.frame_index // self.cols) % self.rows
-        new_col = random.randint(0, self.cols - 1)
-        self.frame_index = current_row * self.cols + new_col
-
-    def set_frame_direct(self, frame_index):
-        self.frame_index = frame_index
-
-    def enable_glow(self):
-        if self.glow:
-            self.glow.update_position(self.pos, self.dice_size)
-            self.glow.opacity = 1
-
-    def disable_glow(self):
-        if self.glow:
-            self.glow.opacity = 0
-
-    def update_glow_position(self):
-        if self.glow:
-            self.glow.update_position(self.pos, self.dice_size)
-
-    def _find_parent_with_method(self, method_name):
-        parent = self.parent
-        while parent:
-            if hasattr(parent, method_name):
-                return parent
-            parent = parent.parent
-        return None
-
-    def generate_rotation_frames(self, start_frame, num_rotations=5):
-        """Генерирует последовательность кадров для анимации вращения (num_rotations оборотов по 12 кадров)"""
-        total_frames = self.rows * self.cols
-        start_row = start_frame // self.cols
-        start_col = start_frame % self.cols
-
-        frames = []
-
-        # Делаем num_rotations полных оборотов
-        for rotation in range(num_rotations):
-            # Каждый оборот - проход по всем колонкам текущего ряда
-            for col_offset in range(1, self.cols + 1):
-                new_col = (start_col + col_offset) % self.cols
-                frames.append(start_row * self.cols + new_col)
-
-        # Возвращаемся в исходный кадр
-        frames.append(start_frame)
-
-        return frames
-
-    def animate_rotation(self, start_frame, num_rotations=5, duration=0.3, callback=None):
-        """Анимирует вращение кубика с заданным количеством оборотов"""
-        if self.is_animating:
-            if callback:
-                callback()
-            return
-
-        self.is_animating = True
-        frames = self.generate_rotation_frames(start_frame, num_rotations)
-
-        if not frames:
-            self.is_animating = False
-            if callback:
-                callback()
-            return
-
-        frame_duration = duration / len(frames)
-        self._animate_rotation_frames(0, frames, frame_duration, callback)
-
-    def _animate_rotation_frames(self, idx, frames, frame_duration, callback):
-        if idx >= len(frames):
-            self.frame_index = frames[-1]
-            self.is_animating = False
-            if callback:
-                callback()
-            return
-
-        self.frame_index = frames[idx]
-        Clock.schedule_once(
-            lambda dt: self._animate_rotation_frames(idx + 1, frames, frame_duration, callback),
-            frame_duration
-        )
-
-    def animate_disappear_in_place(self, duration=0.5, callback=None):
-        if self.is_animating:
-            return
-
-        self.is_animating = True
-
-        parent = self._find_parent_with_method('play_dice_disappear_sound')
-        if parent:
-            parent.play_dice_disappear_sound()
-
-        current_frame = self.frame_index
-        frames = self.generate_rotation_frames(current_frame, num_rotations=5)
-        self.animation_frames = frames
-
-        anim_fade = Animation(opacity=0, duration=duration)
-
-        if self.glow:
-            self.glow.fade_out(duration)
-
-        def on_fade_complete(*args):
-            self._remove_glow()
-            self.is_animating = False
-            if callback:
-                callback()
-
-        anim_fade.bind(on_complete=on_fade_complete)
-        anim_fade.start(self)
-
-        frame_duration = duration / len(frames) if frames else duration
-        self._animate_next_frame(0, frame_duration)
-
-    def _animate_next_frame(self, idx, frame_duration):
-        if idx >= len(self.animation_frames):
-            return
-
-        self.frame_index = self.animation_frames[idx]
-        Clock.schedule_once(lambda dt: self._animate_next_frame(idx + 1, frame_duration), frame_duration)
-
-    def animate_disappear_to_center(self, target_center, duration=0.5, callback=None):
-        if self.is_animating:
-            return
-
-        self.is_animating = True
-
-        parent = self._find_parent_with_method('play_dice_disappear_sound')
-        if parent:
-            parent.play_dice_disappear_sound()
-
-        current_frame = self.frame_index
-        frames = self.generate_rotation_frames(current_frame, num_rotations=5)
-        self.animation_frames = frames
-
-        anim_move = Animation(pos=target_center, duration=duration)
-        anim_fade = Animation(opacity=0, duration=duration)
-
-        if self.glow:
-            glow_move = Animation(pos=target_center, duration=duration)
-            self.glow.fade_out(duration)
-            glow_move.start(self.glow)
-
-        def on_fade_complete(*args):
-            self._remove_glow()
-            self.is_animating = False
-            if callback:
-                callback()
-
-        anim_fade.bind(on_complete=on_fade_complete)
-        anim_move.start(self)
-        anim_fade.start(self)
-
-        frame_duration = duration / len(frames) if frames else duration
-        self._animate_next_frame(0, frame_duration)
-
-    def animate_appearance_from_center(self, target_pos, start_pos, duration=0.6, callback=None):
-        if self.is_animating:
-            return
-
-        self.is_animating = True
-        self.opacity = 1
-
-        self.pos = start_pos
-
-        self._create_glow()
-        if self.glow:
-            self.glow.opacity = 1
-            self.glow.update_position(start_pos, self.dice_size)
-
-        start_row = random.randint(0, self.rows - 1)
-        start_frame = start_row * self.cols
-
-        # Генерируем 5 оборотов вращения
-        frames = []
-        for rotation in range(5):
-            for col in range(1, self.cols + 1):
-                frames.append(start_row * self.cols + (col % self.cols))
-
-        # Финальный кадр - случайный
-        final_col = random.randint(0, self.cols - 1)
-        final_frame = start_row * self.cols + final_col
-        frames.append(final_frame)
-
-        self.animation_frames = frames
-
-        anim_move = Animation(pos=target_pos, duration=duration)
-        anim_move.start(self)
-
-        if self.glow:
-            glow_move = Animation(pos=target_pos, duration=duration)
-            glow_move.start(self.glow)
-
-        self._animate_appearance(0, duration / len(frames), callback)
-
-    def _animate_appearance(self, idx, frame_duration, callback):
-        if idx >= len(self.animation_frames):
-            self.frame_index = self.animation_frames[-1]
-            self.is_animating = False
-            if callback:
-                callback(self)
-            return
-
-        self.frame_index = self.animation_frames[idx]
-        Clock.schedule_once(lambda dt: self._animate_appearance(idx + 1, frame_duration, callback), frame_duration)
-
-    def on_touch_down(self, touch):
-        # Проверяем, заблокированы ли кубики
-        if self.parent and hasattr(self.parent, 'is_dice_blocked') and self.parent.is_dice_blocked:
-            if DEBUG_MODE:
-                print("🔒 [DiceWidget] Кубики заблокированы, клик игнорируется")
-            return True
-
-        if self.collide_point(*touch.pos) and not self.is_animating:
-            print(f"🎲 [DiceWidget] КЛИК ПО КУБИКУ!")
-            if self.on_dice_click:
-                self.on_dice_click()
-            return True
-        return super().on_touch_down(touch)
-
-
-class GlassWidget(Widget):
-    """Виджет стакана со своим спрайт-листом (2 ряда × 12 колонок)"""
-
-    sprite_sheet_path = StringProperty('')
-    glass_size = NumericProperty(100)
-    rows = NumericProperty(2)
-    cols = NumericProperty(12)
-    frame_index = NumericProperty(0)
-    rotation_angle = NumericProperty(-90)
-    is_raised = BooleanProperty(False)
-
-    _texture = ObjectProperty(None, allownone=True)
-
-    def __init__(self, **kwargs):
-        self.initial_glass_size = kwargs.pop('glass_size', None)
-        self.on_glass_click = kwargs.pop('on_glass_click', None)
-        self.on_glass_drag = kwargs.pop('on_glass_drag', None)
-        self.on_glass_drag_end = kwargs.pop('on_glass_drag_end', None)
-        self.is_animating = False
-        self.drag_active = False
-        self.has_moved_during_drag = False
-        self.touch_start_pos = None
-        self.touch_start_time = None
-        super().__init__(**kwargs)
-
-        if self.sprite_sheet_path and os.path.exists(self.sprite_sheet_path):
-            self._load_spritesheet(self.sprite_sheet_path)
-        else:
-            if self.initial_glass_size:
-                self.glass_size = self.initial_glass_size
-                self.size = (self.glass_size, self.glass_size)
-
-        self.bind(
-            frame_index=self._update_display,
-            pos=self._update_display,
-            size=self._update_display,
-            rotation_angle=self._update_display
-        )
-
-    def _load_spritesheet(self, path):
-        try:
-            img = PILImage.open(path)
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-
-            self._texture = Texture.create(size=img.size, colorfmt='rgba')
-            self._texture.blit_buffer(img.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
-
-            if self.initial_glass_size:
-                self.glass_size = self.initial_glass_size
-            else:
-                if platform == 'android':
-                    real_width = Window.system_size[0]
-                    self.glass_size = real_width * 0.12
-                else:
-                    app = App.get_running_app()
-                    screen_params = getattr(app, 'screen_params', None)
-                    if screen_params:
-                        self.glass_size = screen_params.width * 0.12
-                    else:
-                        self.glass_size = 80
-
-            self.size = (self.glass_size, self.glass_size)
-            self._update_display()
-
-        except Exception as e:
-            print(f"Error loading glass spritesheet: {e}")
-
-    def _update_display(self, *args):
-        if not self._texture or self.width == 0:
-            return
-
-        total_frames = self.rows * self.cols
-        if total_frames == 0:
-            return
-
-        frame_idx = self.frame_index % total_frames
-        row = frame_idx // self.cols
-        col = frame_idx % self.cols
-
-        tex_left = col / self.cols
-        tex_right = (col + 1) / self.cols
-        tex_top = row / self.rows
-        tex_bottom = (row + 1) / self.rows
-
-        tex_coords = (tex_left, tex_bottom,
-                      tex_right, tex_bottom,
-                      tex_right, tex_top,
-                      tex_left, tex_top)
-
-        self.canvas.clear()
-
-        with self.canvas:
-            PushMatrix()
-            Translate(self.x + self.width / 2, self.y + self.height / 2)
-            Rotate(angle=self.rotation_angle, origin=(0, 0))
-            Translate(-(self.x + self.width / 2), -(self.y + self.height / 2))
-            Color(1, 1, 1, 1)
-            Rectangle(pos=self.pos, size=self.size, texture=self._texture, tex_coords=tex_coords)
-            PopMatrix()
-
-        if DEBUG_MODE:
-            self.canvas.after.clear()
-            with self.canvas.after:
-                Color(0, 1, 0, 0.8)
-                Line(rectangle=(self.x, self.y, self.width, self.height), width=2)
-
-    def set_frame(self, frame_index):
-        total_frames = self.rows * self.cols
-        if 0 <= frame_index < total_frames:
-            self.frame_index = frame_index
-            if frame_index == 0:
-                self.is_raised = False
-            elif frame_index == total_frames - 1:
-                self.is_raised = True
-
-    def set_raised(self, raised):
-        total_frames = self.rows * self.cols
-        if raised:
-            self.set_frame(total_frames - 1)
-        else:
-            self.set_frame(0)
-
-    def animate_movement(self, start_pos, end_pos, duration, forward=True, callback=None):
-        if self.is_animating:
-            return
-
-        self.is_animating = True
-        total_frames = self.rows * self.cols
-        self.pos = start_pos
-
-        if forward:
-            frames = list(range(total_frames))
-        else:
-            frames = list(range(total_frames - 1, -1, -1))
-
-        frame_duration = duration / total_frames
-
-        anim_move = Animation(pos=end_pos, duration=duration)
-        anim_move.start(self)
-
-        self._animate_frame_sequence(0, frames, frame_duration, callback)
-
-    def _animate_frame_sequence(self, idx, frames, frame_duration, callback):
-        if idx >= len(frames):
-            self.frame_index = frames[-1] if frames else 0
-            self.is_animating = False
-            if callback:
-                callback()
-            return
-
-        self.frame_index = frames[idx]
-        Clock.schedule_once(
-            lambda dt: self._animate_frame_sequence(idx + 1, frames, frame_duration, callback),
-            frame_duration
-        )
-
-    def on_touch_down(self, touch):
-        if self.collide_point(*touch.pos) and not self.is_animating:
-            if self.parent and hasattr(self.parent, 'is_glass_blocked') and self.parent.is_glass_blocked:
-                if DEBUG_MODE:
-                    print("🔒 [WIDGET] Стакан заблокирован, клик игнорируется")
-                return True
-
-            self.drag_active = True
-            self.has_moved_during_drag = False
-            self.touch_start_pos = (touch.x, touch.y)
-            self.touch_start_time = Clock.get_time()
-            if DEBUG_MODE:
-                print(f"🟢 [WIDGET] on_touch_down: начали перетаскивание, pos={self.touch_start_pos}")
-            return True
-        return super().on_touch_down(touch)
-
-    def on_touch_move(self, touch):
-        if self.drag_active:
-            if self.parent and hasattr(self.parent, 'is_glass_blocked') and self.parent.is_glass_blocked:
-                if DEBUG_MODE:
-                    print("🔒 [WIDGET] Стакан заблокирован, движение игнорируется")
-                return True
-
-            if self.touch_start_pos:
-                delta_x = touch.x - self.touch_start_pos[0]
-                delta_y = touch.y - self.touch_start_pos[1]
-
-                if abs(delta_x) > 5 or abs(delta_y) > 5:
-                    self.has_moved_during_drag = True
-                    if DEBUG_MODE:
-                        print(f"🟡 [WIDGET] on_touch_move: delta=({delta_x:.1f}, {delta_y:.1f})")
-                    if self.on_glass_drag:
-                        self.on_glass_drag(delta_x, delta_y, touch)
-                    self.touch_start_pos = (touch.x, touch.y)
-            return True
-        return super().on_touch_move(touch)
-
-    def on_touch_up(self, touch):
-        if DEBUG_MODE:
-            print(f"🟢 [WIDGET] on_touch_up: drag_active={self.drag_active}, has_moved={self.has_moved_during_drag}")
-        if self.drag_active:
-            if self.parent and hasattr(self.parent, 'is_glass_blocked') and self.parent.is_glass_blocked:
-                if DEBUG_MODE:
-                    print("🔒 [WIDGET] Стакан заблокирован, клик игнорируется")
-                self.drag_active = False
-                self.has_moved_during_drag = False
-                self.touch_start_pos = None
-                self.touch_start_time = None
-                return True
-
-            touch_duration = Clock.get_time() - self.touch_start_time
-
-            if not self.has_moved_during_drag and touch_duration < 0.3 and self.on_glass_click:
-                if DEBUG_MODE:
-                    print(f"   👆 Это клик")
-                self.on_glass_click()
-            elif self.has_moved_during_drag and self.on_glass_drag_end:
-                if DEBUG_MODE:
-                    print(f"   ✋ Это окончание перетаскивания")
-                self.on_glass_drag_end(touch)
-
-            self.drag_active = False
-            self.has_moved_during_drag = False
-            self.touch_start_pos = None
-            self.touch_start_time = None
-            return True
-        return super().on_touch_up(touch)
-
-
-class ShadowWidget(Widget):
-    """Виджет тени стакана со своим спрайт-листом (2 ряда × 12 колонок)"""
-
-    scale_factor = NumericProperty(1.0)
-    rotation_angle = NumericProperty(-90)
-    offset_x = NumericProperty(0)
-    offset_y = NumericProperty(0)
-    opacity = NumericProperty(1.0)
-    move_factor_x = NumericProperty(0.8)
-    move_factor_y = NumericProperty(0.8)
-    glass_size = NumericProperty(0)
-
-    sprite_sheet_path = StringProperty('')
-    shadow_size = NumericProperty(100)
-    rows = NumericProperty(2)
-    cols = NumericProperty(12)
-    frame_index = NumericProperty(0)
-
-    _texture = ObjectProperty(None, allownone=True)
-
-    def __init__(self, **kwargs):
-        self.initial_shadow_size = kwargs.pop('shadow_size', None)
-        self.is_animating = False
-        super().__init__(**kwargs)
-
-        if self.sprite_sheet_path and os.path.exists(self.sprite_sheet_path):
-            self._load_spritesheet(self.sprite_sheet_path)
-        else:
-            if self.initial_shadow_size:
-                self.shadow_size = self.initial_shadow_size
-                self.size = (self.shadow_size, self.shadow_size)
-
-        self.bind(
-            frame_index=self._update_display,
-            pos=self._update_display,
-            size=self._update_display,
-            scale_factor=self._update_display,
-            rotation_angle=self._update_display,
-            opacity=self._update_display
-        )
-
-    def _load_spritesheet(self, path):
-        try:
-            img = PILImage.open(path)
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-
-            self._texture = Texture.create(size=img.size, colorfmt='rgba')
-            self._texture.blit_buffer(img.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
-
-            if self.initial_shadow_size:
-                self.shadow_size = self.initial_shadow_size
-            else:
-                if platform == 'android':
-                    real_width = Window.system_size[0]
-                    self.shadow_size = real_width * 0.12
-                else:
-                    app = App.get_running_app()
-                    screen_params = getattr(app, 'screen_params', None)
-                    if screen_params:
-                        self.shadow_size = screen_params.width * 0.12
-                    else:
-                        self.shadow_size = 80
-
-            scaled_size = self.shadow_size * self.scale_factor
-            self.size = (scaled_size, scaled_size)
-            self._update_display()
-
-        except Exception as e:
-            print(f"Error loading shadow spritesheet: {e}")
-
-    def _update_display(self, *args):
-        if not self._texture or self.width == 0:
-            return
-
-        total_frames = self.rows * self.cols
-        if total_frames == 0:
-            return
-
-        frame_idx = self.frame_index % total_frames
-        row = frame_idx // self.cols
-        col = frame_idx % self.cols
-
-        tex_left = col / self.cols
-        tex_right = (col + 1) / self.cols
-        tex_top = row / self.rows
-        tex_bottom = (row + 1) / self.rows
-
-        tex_coords = (tex_left, tex_bottom,
-                     tex_right, tex_bottom,
-                     tex_right, tex_top,
-                     tex_left, tex_top)
-
-        self.canvas.clear()
-
-        with self.canvas:
-            PushMatrix()
-            Translate(self.x + self.width / 2, self.y + self.height / 2)
-            Rotate(angle=self.rotation_angle, origin=(0, 0))
-            Translate(-(self.x + self.width / 2), -(self.y + self.height / 2))
-            Color(1, 1, 1, self.opacity)
-            Rectangle(pos=self.pos, size=self.size, texture=self._texture, tex_coords=tex_coords)
-            PopMatrix()
-
-    def set_frame(self, frame_index):
-        total_frames = self.rows * self.cols
-        if 0 <= frame_index < total_frames:
-            self.frame_index = frame_index
-
-    def move_by_delta(self, delta_x, delta_y):
-        self.pos = (self.pos[0] + delta_x, self.pos[1] + delta_y)
-
-    def animate_movement_to_target(self, target_pos, duration, forward=True, callback=None):
-        if self.is_animating:
-            return
-
-        self.is_animating = True
-        total_frames = self.rows * self.cols
-
-        if forward:
-            frames = list(range(total_frames))
-        else:
-            frames = list(range(total_frames - 1, -1, -1))
-
-        frame_duration = duration / total_frames
-
-        anim_move = Animation(pos=target_pos, duration=duration)
-        anim_move.start(self)
-
-        self._animate_frame_sequence(0, frames, frame_duration, callback)
-
-    def _animate_frame_sequence(self, idx, frames, frame_duration, callback):
-        if idx >= len(frames):
-            self.frame_index = frames[-1] if frames else 0
-            self.is_animating = False
-            if callback:
-                callback()
-            return
-
-        self.frame_index = frames[idx]
-        Clock.schedule_once(
-            lambda dt: self._animate_frame_sequence(idx + 1, frames, frame_duration, callback),
-            frame_duration
-        )
 
 
 class DiceScreen(BaseGameScreen):
@@ -952,7 +39,7 @@ class DiceScreen(BaseGameScreen):
     shadow_move_factor_x = NumericProperty(-1.0)
     shadow_move_factor_y = NumericProperty(0.0)
 
-    ANIMATION_DURATION = 1.5  # Общая длительность анимации увеличения/уменьшения
+    ANIMATION_DURATION = 1.5
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -1171,15 +258,12 @@ class DiceScreen(BaseGameScreen):
             return
         dice.is_animating_scale = True
 
-        # Блокируем стакан в начале анимации увеличения
         self._block_glass()
 
         if dice.original_center is None:
             original_center_x = dice.pos[0] + dice.width / 2
             original_center_y = dice.pos[1] + dice.height / 2
             dice.original_center = (original_center_x, original_center_y)
-            if DEBUG_MODE:
-                print(f"📐 [GROW] Сохранен исходный центр: ({original_center_x:.1f}, {original_center_y:.1f})")
 
         positions = self._get_center_positions()
 
@@ -1199,18 +283,13 @@ class DiceScreen(BaseGameScreen):
         corrected_target_y = target_center_y - target_size / 2
         target_position = (corrected_target_x, corrected_target_y)
 
-        # Анимация свечения: гаснет в первые 0.3 секунды
         if dice.glow:
             anim_glow_fade = Animation(opacity=0, duration=0.3)
             anim_glow_fade.start(dice.glow)
 
-        # Сохраняем текущий кадр для вращения
         current_frame = dice.frame_index
-
-        # Запускаем анимацию вращения (5 оборотов)
         dice.animate_rotation(current_frame, num_rotations=5, duration=self.ANIMATION_DURATION)
 
-        # Линейная анимация размера и позиции
         anim_grow = Animation(dice_size=target_size, duration=self.ANIMATION_DURATION, t='linear')
         anim_move = Animation(pos=target_position, duration=self.ANIMATION_DURATION, t='linear')
 
@@ -1218,7 +297,6 @@ class DiceScreen(BaseGameScreen):
             dice.is_animating_scale = False
             self.is_dice_enlarged = True
             dice.enlarged_size = target_size
-            # Разблокируем кубики после завершения анимации увеличения
             self._unblock_dice()
             if on_complete_callback:
                 on_complete_callback()
@@ -1242,18 +320,13 @@ class DiceScreen(BaseGameScreen):
         corrected_original_y = original_center_y - original_size / 2
         target_position = (corrected_original_x, corrected_original_y)
 
-        # Сохраняем текущий кадр для вращения
         current_frame = dice.frame_index
-
-        # Запускаем анимацию вращения (5 оборотов)
         dice.animate_rotation(current_frame, num_rotations=5, duration=self.ANIMATION_DURATION)
 
-        # Анимация свечения: появляется в последние 0.3 секунды
         if dice.glow:
             dice.glow.opacity = 0
             Clock.schedule_once(lambda dt: self._appear_glow(dice.glow), self.ANIMATION_DURATION - 0.3)
 
-        # Линейная анимация размера и позиции
         anim_shrink = Animation(dice_size=original_size, duration=self.ANIMATION_DURATION, t='linear')
         anim_move_back = Animation(pos=target_position, duration=self.ANIMATION_DURATION, t='linear')
 
@@ -1268,14 +341,11 @@ class DiceScreen(BaseGameScreen):
         anim_move_back.start(dice)
 
     def _appear_glow(self, glow):
-        """Плавное появление свечения"""
         if glow:
             anim = Animation(opacity=1, duration=0.1)
             anim.start(glow)
 
     def _animate_dice_appearance(self):
-        """Анимация появления кубиков: перемещение и увеличение в 5 раз"""
-        # Блокируем кубики
         self._block_dice()
 
         original_positions = self._get_dice_original_positions()
@@ -1286,7 +356,6 @@ class DiceScreen(BaseGameScreen):
         def check_all_complete():
             completed_animations[0] += 1
             if completed_animations[0] >= total_dice:
-                # Кубики разблокируются в on_complete каждой анимации увеличения
                 pass
 
         for i, dice in enumerate(self.dice_list):
@@ -1307,13 +376,11 @@ class DiceScreen(BaseGameScreen):
             self._animate_dice_grow_with_move(dice, target_size, target_position, check_all_complete)
 
     def _shrink_all_dice(self, on_complete_callback=None):
-        """Возвращает все кубики к исходному размеру и позициям"""
         if not self.is_dice_enlarged:
             if on_complete_callback:
                 on_complete_callback()
             return
 
-        # Блокируем кубики во время уменьшения
         self._block_dice()
 
         completed_animations = [0]
@@ -1322,10 +389,7 @@ class DiceScreen(BaseGameScreen):
         def check_all_complete():
             completed_animations[0] += 1
             if completed_animations[0] >= total_dice:
-                if DEBUG_MODE:
-                    print("🔓 [SHRINK] Все кубики вернулись, разблокируем стакан и кубики")
                 self.is_dice_enlarged = False
-                # Разблокируем стакан в конце анимации уменьшения
                 self._unblock_glass()
                 self._unblock_dice()
                 if on_complete_callback:
@@ -1336,7 +400,6 @@ class DiceScreen(BaseGameScreen):
             self._animate_dice_shrink_with_move(dice, original_size, check_all_complete)
 
     def _raise_glass(self, on_complete_callback=None):
-        # Блокируем кубики при подъёме стакана
         self._block_dice()
 
         if self.sound_glass_raise and not self.sound_manager.is_muted():
@@ -1356,7 +419,6 @@ class DiceScreen(BaseGameScreen):
             if on_complete_callback:
                 on_complete_callback()
             self._update_point_a_marker()
-            # Разблокируем кубики после подъёма стакана
             self._unblock_dice()
 
         self.glass.animate_movement(
@@ -1374,7 +436,6 @@ class DiceScreen(BaseGameScreen):
         )
 
     def _lower_glass(self):
-        # Блокируем кубики при опускании стакана
         self._block_dice()
 
         self.max_speed = 0
@@ -1391,7 +452,6 @@ class DiceScreen(BaseGameScreen):
             if self._on_glass_move_complete:
                 self._on_glass_move_complete()
             self._update_point_a_marker()
-            # Разблокируем кубики после опускания стакана
             self._unblock_dice()
 
         self.glass.animate_movement(
@@ -1409,7 +469,6 @@ class DiceScreen(BaseGameScreen):
         )
 
     def _lower_glass_to_center(self, target_center_x, target_center_y):
-        # Блокируем кубики при опускании стакана в центр
         self._block_dice()
 
         self.max_speed = 0
@@ -1461,8 +520,6 @@ class DiceScreen(BaseGameScreen):
                 self.pending_hide_dice = False
 
             self._update_point_a_marker()
-
-            # Разблокируем кубики после опускания стакана
             self._unblock_dice()
 
             if self._on_glass_move_complete:
@@ -1483,26 +540,17 @@ class DiceScreen(BaseGameScreen):
         )
 
     def _on_dice_click(self):
-        """Обработка клика по кубику в зависимости от состояния"""
-        # Проверяем, заблокированы ли кубики
         if self.is_dice_blocked:
             if DEBUG_MODE:
                 print("🔒 [DiceScreen] Кубики заблокированы, клик игнорируется")
             return
 
-        print(f"🔴 [DiceScreen] _on_dice_click ВЫЗВАН, is_dice_enlarged={self.is_dice_enlarged}, current_mode={self.current_mode}")
-
         if self.is_animating:
-            print("   но is_animating=True")
             return
 
         if self.is_dice_enlarged:
-            # Режим 3 - кубики увеличены, возвращаем в предыдущий режим (1 или 2)
-            print("   Режим 3 (увеличенные кубики) - возвращаем на место")
             self._shrink_all_dice()
         else:
-            # Режим 1 или 2 - переключаем между ними
-            print(f"   Режим {self.current_mode} - переключаем на {3 - self.current_mode}")
             self._start_switch_animation()
 
     def on_enter(self):
@@ -1659,7 +707,6 @@ class DiceScreen(BaseGameScreen):
                 dice.glow.update_position(dice.pos, dice.dice_size)
 
     def _on_glass_drag(self, delta_x, delta_y, touch):
-        # Блокировка стакана - если заблокирован, игнорируем перетаскивание
         if self.is_glass_blocked:
             if DEBUG_MODE:
                 print("🔒 [GLASS] Стакан заблокирован, перетаскивание игнорируется")
@@ -1739,7 +786,6 @@ class DiceScreen(BaseGameScreen):
         self.last_touch_time = None
 
     def _on_glass_click(self):
-        # Блокировка стакана - если заблокирован, игнорируем клик
         if self.is_glass_blocked:
             if DEBUG_MODE:
                 print("🔒 [GLASS] Стакан заблокирован, клик игнорируется")
@@ -2026,13 +1072,10 @@ class DiceScreen(BaseGameScreen):
             self.layout.add_widget(self.glass)
 
     def _start_switch_animation(self):
-        print("🔴 [DiceScreen] _start_switch_animation ВЫЗВАН")
         if self.is_animating:
-            print("   но is_animating=True")
             return
 
         if self.is_dice_enlarged:
-            print("   Кубики увеличены - возвращаем на место вместо переключения")
             self._shrink_all_dice()
             return
 
@@ -2040,14 +1083,11 @@ class DiceScreen(BaseGameScreen):
         self._get_dice_center()
 
         if self.current_mode == 1:
-            print("   переключаем 1→2")
             self._animate_one_to_two()
         else:
-            print("   переключаем 2→1")
             self._animate_two_to_one()
 
     def _animate_one_to_two(self):
-        print("🔴 [DiceScreen] _animate_one_to_two ВЫЗВАН")
         if not self.dice_list:
             self.is_animating = False
             return
@@ -2074,11 +1114,8 @@ class DiceScreen(BaseGameScreen):
         center = self._get_dice_center()
         center_pos = (center[0] - self.large_dice_size / 2, center[1] - self.large_dice_size / 2)
 
-        def on_single_disappear():
-            pass
-
-        dice_top.animate_disappear_to_center(center_pos, self.disappear_duration, on_single_disappear)
-        dice_bottom.animate_disappear_to_center(center_pos, self.disappear_duration, on_single_disappear)
+        dice_top.animate_disappear_to_center(center_pos, self.disappear_duration, None)
+        dice_bottom.animate_disappear_to_center(center_pos, self.disappear_duration, None)
 
         appear_delay = self.disappear_duration - self.overlap_time
         Clock.schedule_once(lambda dt: self._create_big_dice(), appear_delay)
