@@ -19,7 +19,7 @@ from kivy.utils import platform
 from kivy.core.audio import SoundLoader
 
 # ===== НАСТРОЙКИ ОТЛАДКИ =====
-DEBUG_MODE = True  # True - показывать зону и точку и зеленые рамки, False - скрыть
+DEBUG_MODE = False  # True - показывать зону и точку и зеленые рамки, False - скрыть
 # =============================
 
 
@@ -223,6 +223,7 @@ class DiceWidget(Widget):
         self.enlarged_size = None
         self.original_position = None
         self.original_center = None
+        self.rotation_frames = []
         super().__init__(**kwargs)
 
         if self.sprite_sheet_path and os.path.exists(self.sprite_sheet_path):
@@ -372,6 +373,59 @@ class DiceWidget(Widget):
             parent = parent.parent
         return None
 
+    def generate_rotation_frames(self, start_frame, num_rotations=5):
+        """Генерирует последовательность кадров для анимации вращения (num_rotations оборотов по 12 кадров)"""
+        total_frames = self.rows * self.cols
+        start_row = start_frame // self.cols
+        start_col = start_frame % self.cols
+
+        frames = []
+
+        # Делаем num_rotations полных оборотов
+        for rotation in range(num_rotations):
+            # Каждый оборот - проход по всем колонкам текущего ряда
+            for col_offset in range(1, self.cols + 1):
+                new_col = (start_col + col_offset) % self.cols
+                frames.append(start_row * self.cols + new_col)
+
+        # Возвращаемся в исходный кадр
+        frames.append(start_frame)
+
+        return frames
+
+    def animate_rotation(self, start_frame, num_rotations=5, duration=0.3, callback=None):
+        """Анимирует вращение кубика с заданным количеством оборотов"""
+        if self.is_animating:
+            if callback:
+                callback()
+            return
+
+        self.is_animating = True
+        frames = self.generate_rotation_frames(start_frame, num_rotations)
+
+        if not frames:
+            self.is_animating = False
+            if callback:
+                callback()
+            return
+
+        frame_duration = duration / len(frames)
+        self._animate_rotation_frames(0, frames, frame_duration, callback)
+
+    def _animate_rotation_frames(self, idx, frames, frame_duration, callback):
+        if idx >= len(frames):
+            self.frame_index = frames[-1]
+            self.is_animating = False
+            if callback:
+                callback()
+            return
+
+        self.frame_index = frames[idx]
+        Clock.schedule_once(
+            lambda dt: self._animate_rotation_frames(idx + 1, frames, frame_duration, callback),
+            frame_duration
+        )
+
     def animate_disappear_in_place(self, duration=0.5, callback=None):
         if self.is_animating:
             return
@@ -383,19 +437,7 @@ class DiceWidget(Widget):
             parent.play_dice_disappear_sound()
 
         current_frame = self.frame_index
-        current_row = current_frame // self.cols
-        current_col = current_frame % self.cols
-
-        frames = []
-
-        for col in range(current_col, self.cols):
-            frames.append(current_row * self.cols + col)
-
-        for row_offset in range(1, self.rows + 1):
-            row = (current_row + row_offset) % self.rows
-            for col in range(0, self.cols):
-                frames.append(row * self.cols + col)
-
+        frames = self.generate_rotation_frames(current_frame, num_rotations=5)
         self.animation_frames = frames
 
         anim_fade = Animation(opacity=0, duration=duration)
@@ -412,7 +454,8 @@ class DiceWidget(Widget):
         anim_fade.bind(on_complete=on_fade_complete)
         anim_fade.start(self)
 
-        self._animate_next_frame(0, duration / len(frames))
+        frame_duration = duration / len(frames) if frames else duration
+        self._animate_next_frame(0, frame_duration)
 
     def _animate_next_frame(self, idx, frame_duration):
         if idx >= len(self.animation_frames):
@@ -432,19 +475,7 @@ class DiceWidget(Widget):
             parent.play_dice_disappear_sound()
 
         current_frame = self.frame_index
-        current_row = current_frame // self.cols
-        current_col = current_frame % self.cols
-
-        frames = []
-
-        for col in range(current_col, self.cols):
-            frames.append(current_row * self.cols + col)
-
-        for row_offset in range(1, self.rows + 1):
-            row = (current_row + row_offset) % self.rows
-            for col in range(0, self.cols):
-                frames.append(row * self.cols + col)
-
+        frames = self.generate_rotation_frames(current_frame, num_rotations=5)
         self.animation_frames = frames
 
         anim_move = Animation(pos=target_center, duration=duration)
@@ -465,7 +496,8 @@ class DiceWidget(Widget):
         anim_move.start(self)
         anim_fade.start(self)
 
-        self._animate_next_frame(0, duration / len(frames))
+        frame_duration = duration / len(frames) if frames else duration
+        self._animate_next_frame(0, frame_duration)
 
     def animate_appearance_from_center(self, target_pos, start_pos, duration=0.6, callback=None):
         if self.is_animating:
@@ -482,12 +514,18 @@ class DiceWidget(Widget):
             self.glow.update_position(start_pos, self.dice_size)
 
         start_row = random.randint(0, self.rows - 1)
-        self.frame_index = start_row * self.cols
-        target_col = random.randint(0, self.cols - 1)
+        start_frame = start_row * self.cols
 
+        # Генерируем 5 оборотов вращения
         frames = []
-        for col in range(0, target_col + 1):
-            frames.append(start_row * self.cols + col)
+        for rotation in range(5):
+            for col in range(1, self.cols + 1):
+                frames.append(start_row * self.cols + (col % self.cols))
+
+        # Финальный кадр - случайный
+        final_col = random.randint(0, self.cols - 1)
+        final_frame = start_row * self.cols + final_col
+        frames.append(final_frame)
 
         self.animation_frames = frames
 
@@ -498,20 +536,26 @@ class DiceWidget(Widget):
             glow_move = Animation(pos=target_pos, duration=duration)
             glow_move.start(self.glow)
 
-        self._animate_appearance(0, duration / len(frames), start_row, target_col, callback)
+        self._animate_appearance(0, duration / len(frames), callback)
 
-    def _animate_appearance(self, idx, frame_duration, start_row, target_col, callback):
+    def _animate_appearance(self, idx, frame_duration, callback):
         if idx >= len(self.animation_frames):
-            self.frame_index = start_row * self.cols + target_col
+            self.frame_index = self.animation_frames[-1]
             self.is_animating = False
             if callback:
                 callback(self)
             return
 
         self.frame_index = self.animation_frames[idx]
-        Clock.schedule_once(lambda dt: self._animate_appearance(idx + 1, frame_duration, start_row, target_col, callback), frame_duration)
+        Clock.schedule_once(lambda dt: self._animate_appearance(idx + 1, frame_duration, callback), frame_duration)
 
     def on_touch_down(self, touch):
+        # Проверяем, заблокированы ли кубики
+        if self.parent and hasattr(self.parent, 'is_dice_blocked') and self.parent.is_dice_blocked:
+            if DEBUG_MODE:
+                print("🔒 [DiceWidget] Кубики заблокированы, клик игнорируется")
+            return True
+
         if self.collide_point(*touch.pos) and not self.is_animating:
             print(f"🎲 [DiceWidget] КЛИК ПО КУБИКУ!")
             if self.on_dice_click:
@@ -908,6 +952,8 @@ class DiceScreen(BaseGameScreen):
     shadow_move_factor_x = NumericProperty(-1.0)
     shadow_move_factor_y = NumericProperty(0.0)
 
+    ANIMATION_DURATION = 1.5  # Общая длительность анимации увеличения/уменьшения
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -963,6 +1009,7 @@ class DiceScreen(BaseGameScreen):
 
         self.is_dice_enlarged = False
         self.is_glass_blocked = False
+        self.is_dice_blocked = False
 
     def get_screen_size(self):
         if platform == 'android':
@@ -1109,10 +1156,23 @@ class DiceScreen(BaseGameScreen):
         if DEBUG_MODE:
             print("🔓 [GLASS] Стакан разблокирован")
 
+    def _block_dice(self):
+        self.is_dice_blocked = True
+        if DEBUG_MODE:
+            print("🔒 [DICE] Кубики заблокированы")
+
+    def _unblock_dice(self):
+        self.is_dice_blocked = False
+        if DEBUG_MODE:
+            print("🔓 [DICE] Кубики разблокированы")
+
     def _animate_dice_grow_with_move(self, dice, target_size, target_position, on_complete_callback=None):
         if hasattr(dice, 'is_animating_scale') and dice.is_animating_scale:
             return
         dice.is_animating_scale = True
+
+        # Блокируем стакан в начале анимации увеличения
+        self._block_glass()
 
         if dice.original_center is None:
             original_center_x = dice.pos[0] + dice.width / 2
@@ -1139,19 +1199,27 @@ class DiceScreen(BaseGameScreen):
         corrected_target_y = target_center_y - target_size / 2
         target_position = (corrected_target_x, corrected_target_y)
 
+        # Анимация свечения: гаснет в первые 0.3 секунды
         if dice.glow:
             anim_glow_fade = Animation(opacity=0, duration=0.3)
             anim_glow_fade.start(dice.glow)
 
-        anim_grow = Animation(dice_size=target_size, duration=0.35, t='out_back')
-        anim_move = Animation(pos=target_position, duration=0.35, t='out_cubic')
+        # Сохраняем текущий кадр для вращения
+        current_frame = dice.frame_index
+
+        # Запускаем анимацию вращения (5 оборотов)
+        dice.animate_rotation(current_frame, num_rotations=5, duration=self.ANIMATION_DURATION)
+
+        # Линейная анимация размера и позиции
+        anim_grow = Animation(dice_size=target_size, duration=self.ANIMATION_DURATION, t='linear')
+        anim_move = Animation(pos=target_position, duration=self.ANIMATION_DURATION, t='linear')
 
         def on_complete(*args):
             dice.is_animating_scale = False
             self.is_dice_enlarged = True
             dice.enlarged_size = target_size
-            if dice.glow:
-                dice.glow.opacity = 0
+            # Разблокируем кубики после завершения анимации увеличения
+            self._unblock_dice()
             if on_complete_callback:
                 on_complete_callback()
 
@@ -1172,14 +1240,22 @@ class DiceScreen(BaseGameScreen):
 
         corrected_original_x = original_center_x - original_size / 2
         corrected_original_y = original_center_y - original_size / 2
+        target_position = (corrected_original_x, corrected_original_y)
 
+        # Сохраняем текущий кадр для вращения
+        current_frame = dice.frame_index
+
+        # Запускаем анимацию вращения (5 оборотов)
+        dice.animate_rotation(current_frame, num_rotations=5, duration=self.ANIMATION_DURATION)
+
+        # Анимация свечения: появляется в последние 0.3 секунды
         if dice.glow:
-            dice.glow.opacity = 1
-            anim_glow_appear = Animation(opacity=1, duration=0.3)
-            anim_glow_appear.start(dice.glow)
+            dice.glow.opacity = 0
+            Clock.schedule_once(lambda dt: self._appear_glow(dice.glow), self.ANIMATION_DURATION - 0.3)
 
-        anim_shrink = Animation(dice_size=original_size, duration=0.35, t='in_back')
-        anim_move_back = Animation(pos=(corrected_original_x, corrected_original_y), duration=0.35, t='in_cubic')
+        # Линейная анимация размера и позиции
+        anim_shrink = Animation(dice_size=original_size, duration=self.ANIMATION_DURATION, t='linear')
+        anim_move_back = Animation(pos=target_position, duration=self.ANIMATION_DURATION, t='linear')
 
         def on_complete(*args):
             dice.is_animating_scale = False
@@ -1191,12 +1267,27 @@ class DiceScreen(BaseGameScreen):
         anim_shrink.start(dice)
         anim_move_back.start(dice)
 
+    def _appear_glow(self, glow):
+        """Плавное появление свечения"""
+        if glow:
+            anim = Animation(opacity=1, duration=0.1)
+            anim.start(glow)
+
     def _animate_dice_appearance(self):
-        """Анимация появления кубиков: смена кадров, перемещение и увеличение в 4 раза"""
-        # Блокируем стакан на всё время, пока кубики увеличены
-        self._block_glass()
+        """Анимация появления кубиков: перемещение и увеличение в 5 раз"""
+        # Блокируем кубики
+        self._block_dice()
 
         original_positions = self._get_dice_original_positions()
+
+        completed_animations = [0]
+        total_dice = len(self.dice_list)
+
+        def check_all_complete():
+            completed_animations[0] += 1
+            if completed_animations[0] >= total_dice:
+                # Кубики разблокируются в on_complete каждой анимации увеличения
+                pass
 
         for i, dice in enumerate(self.dice_list):
             if not hasattr(dice, 'original_position') or dice.original_position is None:
@@ -1210,31 +1301,20 @@ class DiceScreen(BaseGameScreen):
                 original_center_y = dice.pos[1] + dice.height / 2
                 dice.original_center = (original_center_x, original_center_y)
 
-            target_size = dice.original_size * 4
+            target_size = dice.original_size * 5
             target_position = self._get_dice_target_position(dice, 'grow')
 
-            current_row = (dice.frame_index // dice.cols) % dice.rows
-            frames = []
-            for col in range(0, dice.cols):
-                frames.append(current_row * dice.cols + col)
-
-            def animate_frames(idx, frames_list, dice_widget, target_pos, target_sz):
-                if idx >= len(frames_list):
-                    self._animate_dice_grow_with_move(dice_widget, target_sz, target_pos)
-                    return
-                dice_widget.frame_index = frames_list[idx]
-                Clock.schedule_once(lambda dt: animate_frames(idx + 1, frames_list, dice_widget, target_pos, target_sz), 0.015)
-
-            animate_frames(0, frames, dice, target_position, target_size)
+            self._animate_dice_grow_with_move(dice, target_size, target_position, check_all_complete)
 
     def _shrink_all_dice(self, on_complete_callback=None):
         """Возвращает все кубики к исходному размеру и позициям"""
         if not self.is_dice_enlarged:
             if on_complete_callback:
                 on_complete_callback()
-            # Если кубики не были увеличены, разблокируем стакан
-            self._unblock_glass()
             return
+
+        # Блокируем кубики во время уменьшения
+        self._block_dice()
 
         completed_animations = [0]
         total_dice = len(self.dice_list)
@@ -1243,8 +1323,11 @@ class DiceScreen(BaseGameScreen):
             completed_animations[0] += 1
             if completed_animations[0] >= total_dice:
                 if DEBUG_MODE:
-                    print("🔓 [SHRINK] Все кубики вернулись, разблокируем стакан")
+                    print("🔓 [SHRINK] Все кубики вернулись, разблокируем стакан и кубики")
+                self.is_dice_enlarged = False
+                # Разблокируем стакан в конце анимации уменьшения
                 self._unblock_glass()
+                self._unblock_dice()
                 if on_complete_callback:
                     on_complete_callback()
 
@@ -1252,19 +1335,175 @@ class DiceScreen(BaseGameScreen):
             original_size = getattr(dice, 'original_size', dice.dice_size)
             self._animate_dice_shrink_with_move(dice, original_size, check_all_complete)
 
-        self.is_dice_enlarged = False
+    def _raise_glass(self, on_complete_callback=None):
+        # Блокируем кубики при подъёме стакана
+        self._block_dice()
 
-    def _on_enlarged_dice_click(self):
-        """Обработка клика по кубику - возврат на место без смены режима"""
-        print("🔴 [DiceScreen] _on_enlarged_dice_click ВЫЗВАН")
+        if self.sound_glass_raise and not self.sound_manager.is_muted():
+            self.sound_glass_raise.play()
+
+        shadow_target_pos = (self.SHADOW_TARGET_POSITION_X, self.SHADOW_TARGET_POSITION_Y)
+
+        for dice in self.dice_list:
+            if dice.glow:
+                dice.glow.update_position(dice.pos, dice.dice_size)
+            dice.enable_glow()
+
+        def on_animation_complete(*args):
+            self.is_at_target = False
+            if self._on_glass_move_complete:
+                self._on_glass_move_complete()
+            if on_complete_callback:
+                on_complete_callback()
+            self._update_point_a_marker()
+            # Разблокируем кубики после подъёма стакана
+            self._unblock_dice()
+
+        self.glass.animate_movement(
+            start_pos=self.glass_start_pos,
+            end_pos=self.glass_target_pos,
+            duration=0.6,
+            forward=True,
+            callback=on_animation_complete
+        )
+
+        self.shadow.animate_movement_to_target(
+            target_pos=shadow_target_pos,
+            duration=0.6,
+            forward=True
+        )
+
+    def _lower_glass(self):
+        # Блокируем кубики при опускании стакана
+        self._block_dice()
+
+        self.max_speed = 0
+        self.last_touch_pos = None
+        self.last_touch_time = None
+
+        self.shadow.pos = (self.SHADOW_TARGET_POSITION_X, self.SHADOW_TARGET_POSITION_Y)
+        shadow_target_pos = (self.SHADOW_POSITION_X, self.SHADOW_POSITION_Y)
+
+        def on_animation_complete(*args):
+            self.is_at_target = True
+            if self.sound_glass_lower and not self.sound_manager.is_muted():
+                self.sound_glass_lower.play()
+            if self._on_glass_move_complete:
+                self._on_glass_move_complete()
+            self._update_point_a_marker()
+            # Разблокируем кубики после опускания стакана
+            self._unblock_dice()
+
+        self.glass.animate_movement(
+            start_pos=self.glass_target_pos,
+            end_pos=self.glass_start_pos,
+            duration=0.6,
+            forward=False,
+            callback=on_animation_complete
+        )
+
+        self.shadow.animate_movement_to_target(
+            target_pos=shadow_target_pos,
+            duration=0.6,
+            forward=False
+        )
+
+    def _lower_glass_to_center(self, target_center_x, target_center_y):
+        # Блокируем кубики при опускании стакана в центр
+        self._block_dice()
+
+        self.max_speed = 0
+        self.last_touch_pos = None
+        self.last_touch_time = None
+
+        old_start_x = self.glass_start_pos[0]
+        old_start_y = self.glass_start_pos[1]
+        old_target_x = self.glass_target_pos[0]
+        old_target_y = self.glass_target_pos[1]
+        old_shadow_x = self.SHADOW_POSITION_X
+        old_shadow_y = self.SHADOW_POSITION_Y
+        old_shadow_target_x = self.SHADOW_TARGET_POSITION_X
+        old_shadow_target_y = self.SHADOW_TARGET_POSITION_Y
+
+        new_start_x = target_center_x - self.glass_size / 6.5
+        new_start_y = target_center_y - self.glass_size / 2
+
+        offset_x = new_start_x - old_start_x
+        offset_y = new_start_y - old_start_y
+
+        self.shadow.pos = (old_shadow_target_x, old_shadow_target_y)
+        shadow_target_pos = (old_shadow_x + offset_x, old_shadow_y + offset_y)
+
+        Clock.schedule_once(lambda dt: self._disable_glow_for_all_dice(), 0.5)
+
+        def on_animation_complete(*args):
+            self.glass_start_pos = (new_start_x, new_start_y)
+            self.glass_target_pos = (old_target_x + offset_x, old_target_y + offset_y)
+            self.SHADOW_POSITION_X = old_shadow_x + offset_x
+            self.SHADOW_POSITION_Y = old_shadow_y + offset_y
+            self.SHADOW_TARGET_POSITION_X = old_shadow_target_x + offset_x
+            self.SHADOW_TARGET_POSITION_Y = old_shadow_target_y + offset_y
+
+            self.glass.pos = self.glass_start_pos
+            self.shadow.move_by_delta(offset_x, offset_y)
+
+            self.is_at_target = True
+
+            if self.sound_glass_lower and not self.sound_manager.is_muted():
+                self.sound_glass_lower.play()
+
+            if self.pending_hide_dice:
+                for dice in self.dice_list:
+                    dice.opacity = 0
+                    if dice.glow:
+                        dice.glow.opacity = 0
+                self.dice_hidden = True
+                self.pending_hide_dice = False
+
+            self._update_point_a_marker()
+
+            # Разблокируем кубики после опускания стакана
+            self._unblock_dice()
+
+            if self._on_glass_move_complete:
+                self._on_glass_move_complete()
+
+        self.glass.animate_movement(
+            start_pos=self.glass_target_pos,
+            end_pos=(new_start_x, new_start_y),
+            duration=0.6,
+            forward=False,
+            callback=on_animation_complete
+        )
+
+        self.shadow.animate_movement_to_target(
+            target_pos=shadow_target_pos,
+            duration=0.6,
+            forward=False
+        )
+
+    def _on_dice_click(self):
+        """Обработка клика по кубику в зависимости от состояния"""
+        # Проверяем, заблокированы ли кубики
+        if self.is_dice_blocked:
+            if DEBUG_MODE:
+                print("🔒 [DiceScreen] Кубики заблокированы, клик игнорируется")
+            return
+
+        print(f"🔴 [DiceScreen] _on_dice_click ВЫЗВАН, is_dice_enlarged={self.is_dice_enlarged}, current_mode={self.current_mode}")
+
         if self.is_animating:
             print("   но is_animating=True")
             return
 
         if self.is_dice_enlarged:
-            # Если кубики увеличены - возвращаем на место
-            print("   Уменьшаем кубики")
+            # Режим 3 - кубики увеличены, возвращаем в предыдущий режим (1 или 2)
+            print("   Режим 3 (увеличенные кубики) - возвращаем на место")
             self._shrink_all_dice()
+        else:
+            # Режим 1 или 2 - переключаем между ними
+            print(f"   Режим {self.current_mode} - переключаем на {3 - self.current_mode}")
+            self._start_switch_animation()
 
     def on_enter(self):
         super().on_enter()
@@ -1295,8 +1534,6 @@ class DiceScreen(BaseGameScreen):
         self._setup_ui()
 
         Clock.schedule_once(lambda dt: self._create_drop_zone(), 0.1)
-        if DEBUG_MODE:
-            Clock.schedule_once(lambda dt: self._create_point_a_marker(), 0.15)
 
     def _create_drop_zone(self):
         screen_width, screen_height = self.get_screen_size()
@@ -1304,21 +1541,30 @@ class DiceScreen(BaseGameScreen):
         self.layout.add_widget(self.drop_zone)
 
     def _create_point_a_marker(self):
-        self.point_a_marker = PointMarker(color=(1, 0, 0, 1), size=20)
-        self.layout.add_widget(self.point_a_marker)
+        if DEBUG_MODE:
+            self.point_a_marker = PointMarker(color=(1, 0, 0, 1), size=10)
+        else:
+            self.point_a_marker = PointMarker(color=(1, 1, 1, 0.4), size=2)
+
+        self.layout.add_widget(self.point_a_marker, index=0)
         self._update_point_a_marker()
 
     def _update_point_a_marker(self):
         if self.point_a_marker and self.drop_zone:
             point_a_x = self.glass_start_pos[0] + self.glass_size / 6.5
             point_a_y = self.glass_start_pos[1] + self.glass_size / 2
-            in_zone = self.drop_zone.check_point_in_zone(point_a_x, point_a_y)
-            if in_zone:
-                self.point_a_marker.color = (0, 1, 0, 1)
+
+            if DEBUG_MODE:
+                in_zone = self.drop_zone.check_point_in_zone(point_a_x, point_a_y)
+                if in_zone:
+                    self.point_a_marker.color = (0, 1, 0, 1)
+                else:
+                    self.point_a_marker.color = (1, 0, 0, 1)
             else:
-                self.point_a_marker.color = (1, 0, 0, 1)
+                self.point_a_marker.color = (1, 1, 1, 0.4)
+
             self.point_a_marker.update_position(point_a_x, point_a_y, visible=True)
-            return in_zone
+            return in_zone if DEBUG_MODE else True
         return True
 
     def on_leave(self):
@@ -1352,6 +1598,8 @@ class DiceScreen(BaseGameScreen):
         if os.path.exists(self.background_image):
             self.bg = Image(source=self.background_image, allow_stretch=True, keep_ratio=False, size_hint=(1, 1))
             self.layout.add_widget(self.bg, index=0)
+
+        self._create_point_a_marker()
         self._create_shadow()
         self._create_dice_for_mode(1, animate=False)
         self._create_glass()
@@ -1411,6 +1659,12 @@ class DiceScreen(BaseGameScreen):
                 dice.glow.update_position(dice.pos, dice.dice_size)
 
     def _on_glass_drag(self, delta_x, delta_y, touch):
+        # Блокировка стакана - если заблокирован, игнорируем перетаскивание
+        if self.is_glass_blocked:
+            if DEBUG_MODE:
+                print("🔒 [GLASS] Стакан заблокирован, перетаскивание игнорируется")
+            return
+
         if self.is_animating:
             return
         if delta_x == 0 and delta_y == 0:
@@ -1474,6 +1728,8 @@ class DiceScreen(BaseGameScreen):
         self.glass.pos = (new_glass_x, new_glass_y)
         self.shadow.move_by_delta(delta_x, delta_y)
 
+        self._update_point_a_marker()
+
     def _on_glass_drag_end(self, touch):
         if DEBUG_MODE:
             print("🔴 [DRAG_END] Вызван")
@@ -1483,6 +1739,12 @@ class DiceScreen(BaseGameScreen):
         self.last_touch_time = None
 
     def _on_glass_click(self):
+        # Блокировка стакана - если заблокирован, игнорируем клик
+        if self.is_glass_blocked:
+            if DEBUG_MODE:
+                print("🔒 [GLASS] Стакан заблокирован, клик игнорируется")
+            return
+
         if self.is_animating:
             return
 
@@ -1555,136 +1817,9 @@ class DiceScreen(BaseGameScreen):
         else:
             self._lower_glass()
 
-    def _lower_glass(self):
-        self.max_speed = 0
-        self.last_touch_pos = None
-        self.last_touch_time = None
-
-        self.shadow.pos = (self.SHADOW_TARGET_POSITION_X, self.SHADOW_TARGET_POSITION_Y)
-        shadow_target_pos = (self.SHADOW_POSITION_X, self.SHADOW_POSITION_Y)
-
-        def on_animation_complete(*args):
-            self.is_at_target = True
-            if self.sound_glass_lower and not self.sound_manager.is_muted():
-                self.sound_glass_lower.play()
-            if self._on_glass_move_complete:
-                self._on_glass_move_complete()
-
-        self.glass.animate_movement(
-            start_pos=self.glass_target_pos,
-            end_pos=self.glass_start_pos,
-            duration=0.6,
-            forward=False,
-            callback=on_animation_complete
-        )
-
-        self.shadow.animate_movement_to_target(
-            target_pos=shadow_target_pos,
-            duration=0.6,
-            forward=False
-        )
-
-    def _lower_glass_to_center(self, target_center_x, target_center_y):
-        self.max_speed = 0
-        self.last_touch_pos = None
-        self.last_touch_time = None
-
-        old_start_x = self.glass_start_pos[0]
-        old_start_y = self.glass_start_pos[1]
-        old_target_x = self.glass_target_pos[0]
-        old_target_y = self.glass_target_pos[1]
-        old_shadow_x = self.SHADOW_POSITION_X
-        old_shadow_y = self.SHADOW_POSITION_Y
-        old_shadow_target_x = self.SHADOW_TARGET_POSITION_X
-        old_shadow_target_y = self.SHADOW_TARGET_POSITION_Y
-
-        new_start_x = target_center_x - self.glass_size / 6.5
-        new_start_y = target_center_y - self.glass_size / 2
-
-        offset_x = new_start_x - old_start_x
-        offset_y = new_start_y - old_start_y
-
-        self.shadow.pos = (old_shadow_target_x, old_shadow_target_y)
-        shadow_target_pos = (old_shadow_x + offset_x, old_shadow_y + offset_y)
-
-        Clock.schedule_once(lambda dt: self._disable_glow_for_all_dice(), 0.5)
-
-        def on_animation_complete(*args):
-            self.glass_start_pos = (new_start_x, new_start_y)
-            self.glass_target_pos = (old_target_x + offset_x, old_target_y + offset_y)
-            self.SHADOW_POSITION_X = old_shadow_x + offset_x
-            self.SHADOW_POSITION_Y = old_shadow_y + offset_y
-            self.SHADOW_TARGET_POSITION_X = old_shadow_target_x + offset_x
-            self.SHADOW_TARGET_POSITION_Y = old_shadow_target_y + offset_y
-
-            self.glass.pos = self.glass_start_pos
-            self.shadow.move_by_delta(offset_x, offset_y)
-
-            self.is_at_target = True
-
-            if self.sound_glass_lower and not self.sound_manager.is_muted():
-                self.sound_glass_lower.play()
-
-            if self.pending_hide_dice:
-                for dice in self.dice_list:
-                    dice.opacity = 0
-                    if dice.glow:
-                        dice.glow.opacity = 0
-                self.dice_hidden = True
-                self.pending_hide_dice = False
-
-            if self._on_glass_move_complete:
-                self._on_glass_move_complete()
-
-        self.glass.animate_movement(
-            start_pos=self.glass_target_pos,
-            end_pos=(new_start_x, new_start_y),
-            duration=0.6,
-            forward=False,
-            callback=on_animation_complete
-        )
-
-        self.shadow.animate_movement_to_target(
-            target_pos=shadow_target_pos,
-            duration=0.6,
-            forward=False
-        )
-
     def _disable_glow_for_all_dice(self):
         for dice in self.dice_list:
             dice.disable_glow()
-
-    def _raise_glass(self, on_complete_callback=None):
-        if self.sound_glass_raise and not self.sound_manager.is_muted():
-            self.sound_glass_raise.play()
-
-        shadow_target_pos = (self.SHADOW_TARGET_POSITION_X, self.SHADOW_TARGET_POSITION_Y)
-
-        for dice in self.dice_list:
-            if dice.glow:
-                dice.glow.update_position(dice.pos, dice.dice_size)
-            dice.enable_glow()
-
-        def on_animation_complete(*args):
-            self.is_at_target = False
-            if self._on_glass_move_complete:
-                self._on_glass_move_complete()
-            if on_complete_callback:
-                on_complete_callback()
-
-        self.glass.animate_movement(
-            start_pos=self.glass_start_pos,
-            end_pos=self.glass_target_pos,
-            duration=0.6,
-            forward=True,
-            callback=on_animation_complete
-        )
-
-        self.shadow.animate_movement_to_target(
-            target_pos=shadow_target_pos,
-            duration=0.6,
-            forward=True
-        )
 
     def _on_glass_move_complete(self):
         pass
@@ -1736,7 +1871,7 @@ class DiceScreen(BaseGameScreen):
                     size_hint=(None, None),
                     size=(self.large_dice_size, self.large_dice_size),
                     pos=(self.START_POSITION_DICE_X, self.START_POSITION_DICE_Y),
-                    on_dice_click=self._on_enlarged_dice_click
+                    on_dice_click=self._on_dice_click
                 )
                 dice.set_random_frame()
                 dice.original_position = dice.pos
@@ -1761,7 +1896,7 @@ class DiceScreen(BaseGameScreen):
                     size_hint=(None, None),
                     size=(self.dice_size, self.dice_size),
                     pos=(self.START_POSITION_DICE_X, y_top),
-                    on_dice_click=self._on_enlarged_dice_click
+                    on_dice_click=self._on_dice_click
                 )
                 dice1.original_position = dice1.pos
                 dice1.original_size = dice1.dice_size
@@ -1776,7 +1911,7 @@ class DiceScreen(BaseGameScreen):
                     size_hint=(None, None),
                     size=(self.dice_size, self.dice_size),
                     pos=(self.START_POSITION_DICE_X, y_bottom),
-                    on_dice_click=self._on_enlarged_dice_click
+                    on_dice_click=self._on_dice_click
                 )
                 dice2.original_position = dice2.pos
                 dice2.original_size = dice2.dice_size
@@ -1814,7 +1949,7 @@ class DiceScreen(BaseGameScreen):
                 size_hint=(None, None),
                 size=(self.large_dice_size, self.large_dice_size),
                 pos=start_pos,
-                on_dice_click=self._on_enlarged_dice_click
+                on_dice_click=self._on_dice_click
             )
             dice.set_random_frame()
             self.layout.add_widget(dice)
@@ -1846,7 +1981,7 @@ class DiceScreen(BaseGameScreen):
                 size_hint=(None, None),
                 size=(self.dice_size, self.dice_size),
                 pos=start_pos,
-                on_dice_click=self._on_enlarged_dice_click
+                on_dice_click=self._on_dice_click
             )
 
             dice2 = DiceWidget(
@@ -1859,7 +1994,7 @@ class DiceScreen(BaseGameScreen):
                 size_hint=(None, None),
                 size=(self.dice_size, self.dice_size),
                 pos=start_pos,
-                on_dice_click=self._on_enlarged_dice_click
+                on_dice_click=self._on_dice_click
             )
 
             self.layout.add_widget(dice1)
